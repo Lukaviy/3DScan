@@ -108,6 +108,12 @@ public static class FindPoints {
         public float width;
     }
 
+    private class RayIntersectionWindows
+    {
+        public int rayId;
+        public List<IntersectionWindow> windows;
+    }
+
     public static FoundPoint[] Find(List<IndexedRay>[] cameraRays, float treshold)
     {
         var visitedRays = new HashSet<RayIndex>();
@@ -131,6 +137,8 @@ public static class FindPoints {
             {
                 break;
             }
+
+            var intersections = new List<RayIntersectionWindows>();
             
             for (var ray1_id = 0; ray1_id < cameraRays[bestCamId].Count; ++ray1_id)
             {
@@ -174,7 +182,7 @@ public static class FindPoints {
 
                 rayIntersections.Sort((x, y) => x.distance.CompareTo(y.distance));
 
-                IntersectionWindow bestIntersectionWindow = null;
+                List<IntersectionWindow> bestIntersectionWindows = null;
 
                 for (var i = 0; i < rayIntersections.Count; i++)
                 {
@@ -198,40 +206,72 @@ public static class FindPoints {
 
                     float width = last_distance - rayIntersections[i].distance;
 
-                    if (bestIntersectionWindow == null || bestIntersectionWindow.intersections.Count <= set.Count)
+                    if (bestIntersectionWindows == null || bestIntersectionWindows[0].intersections.Count <= set.Count)
                     {
-                        if (bestIntersectionWindow != null && bestIntersectionWindow.intersections.Count == set.Count && width > bestIntersectionWindow.width)
+                        var window = new IntersectionWindow { intersections = set.Values.ToList(), width = width };
+                        if (bestIntersectionWindows != null && bestIntersectionWindows[0].intersections.Count == set.Count)
                         {
-                            continue;
+                            bestIntersectionWindows.Add(window);
                         }
-                        bestIntersectionWindow = new IntersectionWindow { intersections = set.Values.ToList(), width = width };
+                        bestIntersectionWindows = new List<IntersectionWindow> { window };
                     }
                 }
 
-                if (bestIntersectionWindow == null)
+                if (bestIntersectionWindows != null)
                 {
-                    continue;
+                    intersections.Add(new RayIntersectionWindows { windows = bestIntersectionWindows, rayId = ray1_id });
                 }
-
-                var point = Vector3.zero;
-                var pointIds = new List<int>();
-                pointIds.Add(cameraRays[bestCamId][ray1_id].pointIndex);
-                visitedRays.Add(new RayIndex(bestCamId, ray1_id));
-
-                foreach (var intersection in bestIntersectionWindow.intersections)
-                {
-                    point += intersection.segment.point;
-                    pointIds.Add(cameraRays[intersection.camId][intersection.rayId].pointIndex);
-                    visitedRays.Add(new RayIndex(intersection.camId, intersection.rayId));
-                }
-
-                point /= bestIntersectionWindow.intersections.Count;
-
-                var foundPoint = new FoundPoint { point = point, pointIds = pointIds.ToArray() };
-
-                res.Add(foundPoint);
-                somethingChanged = true;
             }
+
+            if (intersections.Count == 0)
+            {
+                break;
+            }
+
+            IntersectionWindow bestIntersectionWindow = null;
+
+            intersections.Sort((x, y) => x.windows.Count.CompareTo(y.windows.Count));
+
+            var bestCount = intersections[0].windows.Count;
+            var bestWidth = float.MaxValue;
+            var bestRay = 0;
+
+            foreach (var intersection in intersections)
+            {
+                if (intersection.windows.Count > bestCount)
+                {
+                    break;
+                }
+
+                foreach (var window in intersection.windows)
+                {
+                    if (window.width < bestWidth)
+                    {
+                        bestIntersectionWindow = window;
+                        bestRay = intersection.rayId;
+                        bestWidth = window.width;
+                    }
+                }
+            }
+
+            var point = Vector3.zero;
+            var pointIds = new List<int>();
+            pointIds.Add(cameraRays[bestCamId][bestRay].pointIndex);
+            visitedRays.Add(new RayIndex(bestCamId, bestRay));
+
+            foreach (var intersection in bestIntersectionWindow.intersections)
+            {
+                point += intersection.segment.point;
+                pointIds.Add(cameraRays[intersection.camId][intersection.rayId].pointIndex);
+                visitedRays.Add(new RayIndex(intersection.camId, intersection.rayId));
+            }
+
+            point /= bestIntersectionWindow.intersections.Count;
+
+            var foundPoint = new FoundPoint { point = point, pointIds = pointIds.ToArray() };
+
+            res.Add(foundPoint);
+            somethingChanged = true;
         }
 
         return res.ToArray();

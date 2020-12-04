@@ -94,7 +94,7 @@ public class Cast : MonoBehaviour
 
         if (Input.GetKeyDown(KeyCode.Space))
         {
-            foundPoints = FindPoints.Find(GetIndexedRays(intersectedLaserPoints, cameraRays), 10.0f);
+            foundPoints = FindPoints.Find(GetIndexedRays(intersectedLaserPoints, cameraRays), 30.0f);
         }
     }
 
