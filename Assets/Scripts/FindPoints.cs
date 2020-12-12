@@ -185,18 +185,18 @@ public static class FindPoints {
                 {
                     var j = i + 1;
                     var set = new Dictionary<int, RayIntersection>();
-                    set[rayIntersections[i].rayId] = rayIntersections[i];
+                    set[rayIntersections[i].camId] = rayIntersections[i];
 
                     float last_distance = rayIntersections[i].distance;
 
                     while (j < rayIntersections.Count && rayIntersections[j].distance - rayIntersections[i].distance < treshold)
                     {
-                        if (set.ContainsKey(rayIntersections[j].rayId))
+                        if (set.ContainsKey(rayIntersections[j].camId))
                         {
                             ++j;
                             continue;
                         }
-                        set[rayIntersections[j].rayId] = rayIntersections[j];
+                        set[rayIntersections[j].camId] = rayIntersections[j];
                         last_distance = rayIntersections[j].distance;
                         ++j;
                     }
@@ -232,7 +232,7 @@ public static class FindPoints {
             var bestCount = intersections[0].windows.Count;
             var bestWidth = float.MaxValue;
             var bestRay = 0;
-            var bestInWindowCount = int.MaxValue;
+            var bestInWindowCount = 0;
 
             foreach (var intersection in intersections)
             {
@@ -243,16 +243,16 @@ public static class FindPoints {
 
                 foreach (var window in intersection.windows)
                 {
-                    //if (bestInWindowCount > window.intersections.Count)
-                    //{
-                    //    continue;
-                    //}
+                    if (bestInWindowCount > window.intersections.Count)
+                    {
+                        continue;
+                    }
 
-                    //if (bestInWindowCount < window.intersections.Count)
-                    //{
-                    //    bestWidth = float.MaxValue;
-                    //    bestInWindowCount = window.intersections.Count;
-                    //}
+                    if (bestInWindowCount < window.intersections.Count)
+                    {
+                        bestWidth = float.MaxValue;
+                        bestInWindowCount = window.intersections.Count;
+                    }
 
                     if (window.width < bestWidth)
                     {
@@ -361,18 +361,18 @@ public static class FindPoints {
                 {
                     var j = i + 1;
                     var set = new Dictionary<int, RayIntersection>();
-                    set[rayIntersections[i].rayId] = rayIntersections[i];
+                    set[rayIntersections[i].camId] = rayIntersections[i];
 
                     float last_distance = rayIntersections[i].distance;
 
                     while (j < rayIntersections.Count && rayIntersections[j].distance - rayIntersections[i].distance < treshold)
                     {
-                        if (set.ContainsKey(rayIntersections[j].rayId))
+                        if (set.ContainsKey(rayIntersections[j].camId))
                         {
                             ++j;
                             continue;
                         }
-                        set[rayIntersections[j].rayId] = rayIntersections[j];
+                        set[rayIntersections[j].camId] = rayIntersections[j];
                         last_distance = rayIntersections[j].distance;
                         ++j;
                     }
