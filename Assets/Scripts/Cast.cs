@@ -25,6 +25,14 @@ public class Cast : MonoBehaviour
         return res;
     }
 
+    public enum FoundPointsDrawType
+    {
+        SingleColor,
+        FoundOrder,
+        Score,
+        IntersectionsCount
+    }
+
     public Transform[] cameras;
     public Transform laser;
 
@@ -32,18 +40,35 @@ public class Cast : MonoBehaviour
     public int Height;
     public float Scale;
     public float Distance;
-    public float randomNoiseMultiplier = 0;
-    public float randomScale = 1;
+    public float ChessboadRandomNoiseMultiplier = 0;
+    public float ChessboardRandomScale = 1;
+    public float RaysNoise = 0;
+    public float Treshold = 30.0f;
     public float labelOffset = 0;
+    public float sphereRadius = 20.0f;
+    public FoundPointsDrawType foundPointsDrawType = FoundPointsDrawType.SingleColor;
     public bool drawPointLabels;
     public bool drawLaserRays;
+    public bool drawNoisedLaserRays;
+    public bool drawImportedLaserRays;
     public bool drawCameraRays;
     public bool drawOriginPoints;
     public bool drawFoundPoints;
+    public bool drawCameraOpticLines;
+    public bool drawPointIndex;
+    public bool drawRaysParticipatedInPoints;
+    public bool drawSizeAsScore;
+    public bool drawScoreLabel;
+    public int pointIndex = -1;
+    public int drawImportedRaysWithIntersectionsCountMin = 2;
+    public int drawImportedRaysWithIntersectionsCountMax = 4;
+    public float importedRayLength = 2.0f;
 
     Vector3[] laserPoints;
     List<Vector3> intersectedLaserPoints = new List<Vector3>();
     List<int>[] cameraRays;
+    List<IndexedRay>[] importedCameraRays;
+    List<IndexedRay>[] noisedRays;
 
     FoundPoint[] foundPoints = null;
 
@@ -53,8 +78,9 @@ public class Cast : MonoBehaviour
         cameraRays = new List<int>[cameras.Length];
     }
 
-    List<IndexedRay>[] GetIndexedRays(List<Vector3> intersectedLaserPoints, List<int>[] cameraRays)
+    List<IndexedRay>[] GetIndexedRays(List<Vector3> intersectedLaserPoints, List<int>[] cameraRays, float noise)
     {
+        Random.InitState(0);
         var res = new List<IndexedRay>[cameraRays.Length];
 
         for (var camId = 0; camId < cameraRays.Length; camId++)
@@ -62,7 +88,9 @@ public class Cast : MonoBehaviour
             res[camId] = new List<IndexedRay>();
             foreach (var rayId in cameraRays[camId])
             {
-                var direction = (cameras[camId].position - intersectedLaserPoints[rayId]).normalized;
+                var direction = (cameras[camId].position - intersectedLaserPoints[rayId] + new Vector3(Random.Range(-noise/2, noise/2), Random.Range(-noise / 2, noise / 2), Random.Range(-noise / 2, noise / 2))).normalized;
+                //var noiseDistance = Random.Range(0, noise);
+                //var noiseAngle = Random.Range(0, 2 * Mathf.PI);
                 res[camId].Add(new IndexedRay { ray = new Ray(cameras[camId].position, direction), pointIndex = new RayIndex(camId, rayId) });
             }
         }
@@ -73,7 +101,7 @@ public class Cast : MonoBehaviour
     // Update is called once per frame
     void Update()
     {
-        laserPoints = GetChessboard(Width, Height, randomNoiseMultiplier, randomScale);
+        laserPoints = GetChessboard(Width, Height, ChessboadRandomNoiseMultiplier, ChessboardRandomScale);
 
         intersectedLaserPoints = new List<Vector3>();
         for (var i = 0; i < cameraRays.Length; i++)
@@ -101,14 +129,27 @@ public class Cast : MonoBehaviour
             }
         }
 
+        noisedRays = GetIndexedRays(intersectedLaserPoints, cameraRays, RaysNoise);
+
+        if (Input.GetKeyDown(KeyCode.N))
+        {
+            foundPoints = FindPoints.FindNew(noisedRays, Treshold);
+        }
+
         if (Input.GetKeyDown(KeyCode.Space))
         {
-            foundPoints = FindPoints.Find(GetIndexedRays(intersectedLaserPoints, cameraRays), 30.0f);
+            foundPoints = FindPoints.Find(noisedRays, Treshold);
         }
 
         if (Input.GetKeyDown(KeyCode.A))
         {
-            foundPoints = FindPoints.FindOld(GetIndexedRays(intersectedLaserPoints, cameraRays), 30.0f);
+            foundPoints = FindPoints.FindOld(noisedRays, Treshold);
+        }
+
+        if (Input.GetKeyDown(KeyCode.P))
+        {
+            importedCameraRays = MathematicaRayLoader.Load(@"C:\projects\python_side\test", 4);
+            foundPoints = FindPoints.FindNew(importedCameraRays, Treshold);
         }
     }
 
@@ -123,7 +164,54 @@ public class Cast : MonoBehaviour
             }
             if (drawOriginPoints)
             {
-                Gizmos.DrawSphere(point, 20.0f);
+                Gizmos.DrawSphere(point, sphereRadius);
+            }
+        }
+
+        if (drawNoisedLaserRays)
+        {
+            Gizmos.color = Color.blue;
+            foreach (var camera in noisedRays)
+            {
+                foreach (var ray in camera) {
+                    Gizmos.DrawLine(ray.ray.origin, ray.ray.origin - ray.ray.direction * 4000.0f); 
+                }
+            }
+        }
+
+        if (drawImportedLaserRays)
+        {
+            Gizmos.color = Color.blue;
+            foreach (var camera in importedCameraRays)
+            {
+                foreach (var ray in camera)
+                {
+                    Gizmos.DrawLine(ray.ray.origin, ray.ray.origin - ray.ray.direction * importedRayLength);
+                }
+            }
+        }
+
+        if (drawRaysParticipatedInPoints)
+        {
+            Gizmos.color = Color.blue;
+
+            for (var i = 0; i < foundPoints.Length; i++)
+            {
+                if (pointIndex != -1 && i != pointIndex)
+                {
+                    continue;
+                }
+
+                var foundPoint = foundPoints[i];
+                if (foundPoint.pointIds.Length >= drawImportedRaysWithIntersectionsCountMin &&
+                    foundPoint.pointIds.Length <= drawImportedRaysWithIntersectionsCountMax)
+                {
+                    foreach (var foundPointPointId in foundPoint.pointIds)
+                    {
+                        var ray = importedCameraRays[foundPointPointId.camId][foundPointPointId.rayId];
+                        Gizmos.DrawLine(ray.ray.origin, ray.ray.origin - ray.ray.direction * importedRayLength);
+                    }
+                }
             }
         }
 
@@ -143,9 +231,51 @@ public class Cast : MonoBehaviour
 
         if (foundPoints != null && drawFoundPoints)
         {
-            foreach (var point in foundPoints)
+            var delta = 1.0f / foundPoints.Length / 2;
+            var H = 0.0f;
+
+            var maxScore = 0.0f;
+
+            if (foundPointsDrawType == FoundPointsDrawType.Score)
             {
-                Gizmos.DrawSphere(point.point, 20.0f);
+                maxScore = foundPoints.Max(x => x.score);
+            }
+
+            for (var j = 0; j < foundPoints.Length; j++)
+            {
+                if (pointIndex != -1 && j != pointIndex)
+                {
+                    continue;
+                }
+
+                var point = foundPoints[j];
+
+                if (foundPointsDrawType == FoundPointsDrawType.FoundOrder)
+                {
+                    Gizmos.color = Color.HSVToRGB(H, 1, 1);
+                    H += delta;
+                }
+                if (foundPointsDrawType == FoundPointsDrawType.Score)
+                {
+                    Gizmos.color = Color.HSVToRGB(point.score / (maxScore * 2), 1, 1);
+                }
+                if (foundPointsDrawType == FoundPointsDrawType.IntersectionsCount)
+                {
+                    Gizmos.color = Color.HSVToRGB(1 - point.pointIds.Length / (1.0f * importedCameraRays.Length), 1, 1);
+                }
+                Gizmos.DrawSphere(point.point, drawSizeAsScore ? point.score * sphereRadius : sphereRadius);
+
+                if (drawPointIndex)
+                {
+                    UnityEditor.Handles.color = Color.white;
+                    UnityEditor.Handles.Label(point.point + new Vector3(labelOffset, labelOffset, labelOffset), $"{j}");
+                }
+
+                if (drawScoreLabel)
+                {
+                    UnityEditor.Handles.color = Color.white;
+                    UnityEditor.Handles.Label(point.point + new Vector3(labelOffset, labelOffset, labelOffset), $"{point.score}");
+                }
 
                 if (drawPointLabels)
                 {
@@ -162,6 +292,15 @@ public class Cast : MonoBehaviour
                     UnityEditor.Handles.color = Color.white;
                     UnityEditor.Handles.Label(point.point + new Vector3(labelOffset, labelOffset, labelOffset), text);
                 }
+            }
+        }
+
+        if (drawCameraOpticLines)
+        {
+            Gizmos.color = Color.yellow;
+            foreach (var camera in cameras)
+            {
+                Gizmos.DrawRay(new Ray(camera.position, camera.forward));
             }
         }
     }
