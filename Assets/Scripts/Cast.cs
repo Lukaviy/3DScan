@@ -44,6 +44,8 @@ public class Cast : MonoBehaviour
     public float ChessboardRandomScale = 1;
     public float RaysNoise = 0;
     public float Treshold = 30.0f;
+    public int kNearestNeighbors = 4;
+    public int kMinNearestNeighbors = 2;
     public float labelOffset = 0;
     public float sphereRadius = 20.0f;
     public FoundPointsDrawType foundPointsDrawType = FoundPointsDrawType.SingleColor;
@@ -63,6 +65,8 @@ public class Cast : MonoBehaviour
     public int drawImportedRaysWithIntersectionsCountMin = 2;
     public int drawImportedRaysWithIntersectionsCountMax = 4;
     public float importedRayLength = 2.0f;
+    public string mathematicaString;
+    public List<string> nearestNeighbors;
 
     Vector3[] laserPoints;
     List<Vector3> intersectedLaserPoints = new List<Vector3>();
@@ -148,8 +152,15 @@ public class Cast : MonoBehaviour
 
         if (Input.GetKeyDown(KeyCode.P))
         {
-            importedCameraRays = MathematicaRayLoader.Load(@"C:\projects\python_side\test", 4);
+            importedCameraRays = MathematicaRayLoader.LoadCamVectors(@"C:\projects\python_side\test", 4);
             foundPoints = FindPoints.FindNew(importedCameraRays, Treshold);
+        }
+
+        if (Input.GetKeyDown(KeyCode.O))
+        {
+            importedCameraRays = MathematicaRayLoader.LoadCamVectors(@"C:\projects\python_side\test", 4);
+            var importedCameraPoints = MathematicaRayLoader.LoadCamPoints(@"C:\projects\python_side\test", 4);
+            foundPoints = FindPoints.FindBasedOnKNearestNeighbors(importedCameraRays, Treshold, importedCameraPoints, kNearestNeighbors, kMinNearestNeighbors);
         }
     }
 
@@ -229,6 +240,8 @@ public class Cast : MonoBehaviour
 
         Gizmos.color = Color.red;
 
+        List<string> pointStrings = new List<string>();
+
         if (foundPoints != null && drawFoundPoints)
         {
             var delta = 1.0f / foundPoints.Length / 2;
@@ -247,6 +260,14 @@ public class Cast : MonoBehaviour
                 {
                     continue;
                 }
+
+                if (pointIndex != -1)
+                { 
+                    nearestNeighbors = foundPoints[j].nearestNeighborsPointId.Select(x => x != null ? "{" + string.Join(", ", x) + "}" : "").ToList();
+                }
+
+                pointStrings.Add("{" + string.Join(", ", foundPoints[j].pointIds.Select((x, i) =>
+                    $"<| \"camId\"->{x.camId}, \"pointId\"->{i}, \"rayId\"->{x.rayId}, \"nearestNeighbors\"->{{{string.Join(", ", foundPoints[j].nearestNeighborsRayId[x.camId])}}}, \"intersectedNeighbors\"->{{{string.Join(", ", foundPoints[j].intersectedNeighborsRayId[x.camId])}}}|>")) + "}");
 
                 var point = foundPoints[j];
 
@@ -294,6 +315,8 @@ public class Cast : MonoBehaviour
                 }
             }
         }
+
+        mathematicaString = "{" + string.Join(", ", pointStrings) + "}";
 
         if (drawCameraOpticLines)
         {

@@ -1,6 +1,7 @@
 ﻿using System.Collections;
 using System.Collections.Generic;
 using System.Globalization;
+using System.Runtime.Serialization.Formatters;
 using System.Text.RegularExpressions;
 using UnityEngine;
 
@@ -25,7 +26,7 @@ public static class MathematicaRayLoader
         return res;
     }
 
-    public static List<IndexedRay>[] Load(string path, int count)
+    public static List<IndexedRay>[] LoadCamVectors(string path, int count)
     {
         var res = new List<IndexedRay>[count];
 
@@ -40,6 +41,36 @@ public static class MathematicaRayLoader
             {
                 res[i].Add(new IndexedRay{ ray = new Ray(rayStarts[j], (rayStarts[j] - rayEnds[j]).normalized), pointIndex = new RayIndex(i, j)});
             }
+        }
+
+        return res;
+    }
+    private static List<Vector2> LoadPoints(string path)
+    {
+        var res = new List<Vector2>();
+
+        string[] lines = System.IO.File.ReadAllLines(path);
+
+        foreach (var line in lines)
+        {
+            var r = Regex.Match(line, @"(?<x>[-\d.]+),(?<y>[-\d.]+)");
+
+            var x = float.Parse(r.Groups["x"].Value, CultureInfo.InvariantCulture);
+            var y = float.Parse(r.Groups["y"].Value, CultureInfo.InvariantCulture);
+
+            res.Add(new Vector2(x, y));
+        }
+
+        return res;
+    }
+
+    public static List<Vector2>[] LoadCamPoints(string path, int count)
+    {
+        var res = new List<Vector2>[count];
+
+        for (int i = 0; i < count; i++)
+        {
+            res[i] = LoadPoints($"{path}\\points{i}.csv");
         }
 
         return res;
