@@ -296,7 +296,6 @@ public static class FindPoints {
             var bestWidth = float.MaxValue;
             var bestRay = -1;
             var bestInWindowCount = 0;
-            var bestKNearestPoints = 0;
 
             foreach (var intersection in intersections)
             {
@@ -307,6 +306,11 @@ public static class FindPoints {
 
                 foreach (var window in intersection.windows)
                 {
+                    if (res.Count > k && window.nearestPointsSetUnionLength < kMin)
+                    {
+                        continue;
+                    }
+
                     if (bestInWindowCount > window.intersections.Count)
                     {
                         continue;
@@ -323,20 +327,19 @@ public static class FindPoints {
                         bestIntersectionWindow = window;
                         bestRay = intersection.rayId;
                         bestWidth = window.score;
-                        bestKNearestPoints = window.nearestPointsSetUnionLength;
                     }
                 }
+            }
+
+            if (bestRay < 0)
+            {
+                break;
             }
 
             var point = Vector3.zero;
             var pointIds = new List<RayIndex>();
             pointIds.Add(cameraRays[bestCamId][bestRay].pointIndex);
             visitedRays.Add(new RayIndex(bestCamId, bestRay));
-
-            if (res.Count > k && bestKNearestPoints < kMin)
-            {
-                continue;
-            }
 
             foreach (var intersection in bestIntersectionWindow.intersections)
             {
