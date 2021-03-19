@@ -254,22 +254,22 @@ public class Cast : MonoBehaviour
                 maxScore = foundPoints.Max(x => x.score);
             }
 
-            for (var j = 0; j < foundPoints.Length; j++)
+            for (var pointId = 0; pointId < foundPoints.Length; pointId++)
             {
-                if (pointIndex != -1 && j != pointIndex)
+                if (pointIndex != -1 && pointId != pointIndex)
                 {
                     continue;
                 }
 
                 if (pointIndex != -1)
                 { 
-                    nearestNeighbors = foundPoints[j].nearestNeighborsPointId.Select(x => x != null ? "{" + string.Join(", ", x) + "}" : "").ToList();
+                    nearestNeighbors = foundPoints[pointId].nearestNeighborsPointId.Select(x => x != null ? "{" + string.Join(", ", x) + "}" : "").ToList();
                 }
 
-                pointStrings.Add("{" + string.Join(", ", foundPoints[j].pointIds.Select((x, i) =>
-                    $"<| \"camId\"->{x.camId}, \"pointId\"->{i}, \"rayId\"->{x.rayId}, \"nearestNeighbors\"->{{{string.Join(", ", foundPoints[j].nearestNeighborsRayId[x.camId])}}}, \"intersectedNeighbors\"->{{{string.Join(", ", foundPoints[j].intersectedNeighborsRayId[x.camId])}}}|>")) + "}");
+                pointStrings.Add("{" + string.Join(", ", foundPoints[pointId].pointIds.Select(x =>
+                    $"<| \"camId\"->{x.camId}, \"pointId\"->{pointId}, \"rayId\"->{x.rayId}, \"nearestNeighborsPointId\"->{{{string.Join(", ",foundPoints[pointId].nearestNeighborsPointId[x.camId])}}}, \"nearestNeighborsRayId\"->{{{string.Join(", ", foundPoints[pointId].nearestNeighborsRayId[x.camId])}}}, \"intersectedNeighborsRayId\"->{{{string.Join(", ", foundPoints[pointId].intersectedNeighborsRayId[x.camId])}}}|>")) + "}");
 
-                var point = foundPoints[j];
+                var point = foundPoints[pointId];
 
                 if (foundPointsDrawType == FoundPointsDrawType.FoundOrder)
                 {
@@ -289,7 +289,7 @@ public class Cast : MonoBehaviour
                 if (drawPointIndex)
                 {
                     UnityEditor.Handles.color = Color.white;
-                    UnityEditor.Handles.Label(point.point + new Vector3(labelOffset, labelOffset, labelOffset), $"{j}");
+                    UnityEditor.Handles.Label(point.point + new Vector3(labelOffset, labelOffset, labelOffset), $"{pointId}");
                 }
 
                 if (drawScoreLabel)
