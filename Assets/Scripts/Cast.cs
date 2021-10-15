@@ -33,6 +33,17 @@ public class Cast : MonoBehaviour
         IntersectionsCount
     }
 
+    public enum Algorithm
+    {
+        FindOld,
+        Find,
+        FindNew,
+        NearestNeighbors,
+        NearestNeighborsWithout,
+        NearestNeighborsWithDistances,
+        Paper,
+    }
+
     public Transform[] cameras;
     public Transform laser;
 
@@ -66,7 +77,15 @@ public class Cast : MonoBehaviour
     public int drawImportedRaysWithIntersectionsCountMax = 4;
     public float importedRayLength = 2.0f;
     public string mathematicaString;
+    public string foundPointsString;
+    public string testsPath;
+    public string camPosesPath;
+    public string outputPath;
+    public int testsCount;
+    public List<int> cameraIds;
     public List<string> nearestNeighbors;
+    public Algorithm algorithm;
+
 
     Vector3[] laserPoints;
     List<Vector3> intersectedLaserPoints = new List<Vector3>();
@@ -161,6 +180,134 @@ public class Cast : MonoBehaviour
             importedCameraRays = MathematicaRayLoader.LoadCamVectors(@"C:\projects\python_side\test", 4);
             var importedCameraPoints = MathematicaRayLoader.LoadCamPoints(@"C:\projects\python_side\test", 4);
             foundPoints = FindPoints.FindBasedOnKNearestNeighbors(importedCameraRays, Treshold, importedCameraPoints, kNearestNeighbors, kMinNearestNeighbors);
+        }
+
+        if (Input.GetKeyDown(KeyCode.U))
+        {
+            importedCameraRays = MathematicaRayLoader.LoadCamVectors(@"C:\projects\python_side\test", 4);
+            var importedCameraPoints = MathematicaRayLoader.LoadCamPoints(@"C:\projects\python_side\test", 4);
+            foundPoints = FindPoints.FindBasedOnKNearestNeighborsWithout(importedCameraRays, Treshold, importedCameraPoints, kNearestNeighbors, kMinNearestNeighbors);
+        }
+
+        if (Input.GetKeyDown(KeyCode.R))
+        {
+            var tests = MathematicaRayLoader.LoadTestsResults(testsPath, 1, new[] { 0, 1, 2, 3 });
+            importedCameraRays = tests[0].rays;
+            foundPoints = FindPoints.FindBasedOnKNearestNeighborsWithout(importedCameraRays, Treshold,
+                tests[0].camPoints, kNearestNeighbors, kMinNearestNeighbors);
+        }
+
+        if (Input.GetKeyDown(KeyCode.Q))
+        {
+            var tests = camPosesPath.Length == 0
+                ? MathematicaRayLoader.LoadTestsResults(testsPath, testsCount, cameraIds.ToArray())
+                : MathematicaRayLoader.LoadTestsResults(testsPath, camPosesPath, testsCount, cameraIds.ToArray());
+
+            var points = tests.AsParallel().Select(test => FindPoints.FindBasedOnKNearestNeighbors(
+                    test.rays, Treshold,
+                    test.camPoints, kNearestNeighbors, kMinNearestNeighbors))
+                .ToArray();
+
+            //var points = tests.AsParallel().Select(test => FindPoints.FindBasedOnKNearestNeighborsWithout(
+            //        test.rays, Treshold,
+            //        test.camPoints, kNearestNeighbors, kMinNearestNeighbors))
+            //    .ToArray();
+
+            foundPoints = points[0];
+
+            for (var test_id = 0; test_id < points.Length; test_id++)
+            {
+                System.IO.Directory.CreateDirectory($"{testsPath}/{outputPath}/result");
+                MathematicaRayLoader.SavePoints($"{testsPath}/{outputPath}/result/test_{test_id}.csv", points[test_id].ToList());
+            }
+        }
+
+        if (Input.GetKeyDown(KeyCode.F))
+        {
+            var tests = camPosesPath.Length == 0
+                ? MathematicaRayLoader.LoadTestsResults(testsPath, testsCount, cameraIds.ToArray())
+                : MathematicaRayLoader.LoadTestsResults(testsPath, camPosesPath, testsCount, cameraIds.ToArray());
+
+            var points =
+                algorithm == Algorithm.FindOld ? tests.AsParallel().Select(test => FindPoints.FindOld(test.rays, Treshold)).ToArray() :
+                algorithm == Algorithm.Find ? tests.AsParallel().Select(test => FindPoints.Find(test.rays, Treshold)).ToArray() :
+                algorithm == Algorithm.FindNew ? tests.AsParallel().Select(test => FindPoints.FindNew(test.rays, Treshold)).ToArray() :
+                algorithm == Algorithm.NearestNeighbors ? tests.AsParallel().Select(test => FindPoints.FindBasedOnKNearestNeighbors(test.rays, Treshold,
+                    test.camPoints, kNearestNeighbors, kMinNearestNeighbors)).ToArray() :
+                algorithm == Algorithm.NearestNeighborsWithout ?
+                tests.AsParallel().Select(test => FindPoints.FindBasedOnKNearestNeighborsWithout(test.rays, Treshold,
+                    test.camPoints, kNearestNeighbors, kMinNearestNeighbors)).ToArray() :
+                tests.AsParallel().Select(test => FindPoints.FindBasedOnPaper(test.rays, Treshold)).ToArray();
+
+            foundPoints = points[0];
+
+            var camsName = "";
+
+            foreach (var cam_id in cameraIds)
+            {
+                camsName += cam_id.ToString();
+            }
+
+            var outputPath = algorithm.ToString() + camsName;
+
+            for (var test_id = 0; test_id < points.Length; test_id++)
+            {
+                System.IO.Directory.CreateDirectory($"{testsPath}/{outputPath}/result");
+                MathematicaRayLoader.SavePoints($"{testsPath}/{outputPath}/result/test_{test_id}.csv", points[test_id].ToList());
+            }
+        }
+
+        if (Input.GetKeyDown(KeyCode.W))
+        {
+            var camPoses = MathematicaRayLoader.LoadCamPosData(camPosesPath, cameraIds.ToArray());
+            var test = MathematicaRayLoader.LoadTestResult($"{testsPath}/test_{testsCount}", camPoses, cameraIds.ToArray());
+
+            var points =
+                algorithm == Algorithm.FindOld ? FindPoints.FindOld(test.rays, Treshold) :
+                algorithm == Algorithm.Find ? FindPoints.Find(test.rays, Treshold) :
+                algorithm == Algorithm.FindNew ? FindPoints.FindNew(test.rays, Treshold) :
+                algorithm == Algorithm.NearestNeighbors ? FindPoints.FindBasedOnKNearestNeighbors(test.rays, Treshold,
+                    test.camPoints, kNearestNeighbors, kMinNearestNeighbors) :
+                algorithm == Algorithm.NearestNeighborsWithout ?
+                FindPoints.FindBasedOnKNearestNeighborsWithout(test.rays, Treshold,
+                    test.camPoints, kNearestNeighbors, kMinNearestNeighbors) :
+                FindPoints.FindBasedOnPaper(test.rays, Treshold);
+
+            foundPoints = points;
+        }
+
+        if (Input.GetKeyDown(KeyCode.T))
+        {
+            var groups = new List<FindPoints.IntersectionGroup>
+            {
+                new FindPoints.IntersectionGroup{ camRayIndices = new int[] { 1, -1, 3, -1 } },
+                new FindPoints.IntersectionGroup{ camRayIndices = new int[] { -1, 2, -1, 4 } },
+                new FindPoints.IntersectionGroup{ camRayIndices = new int[] { 1, 2, -1, -1 } },
+                new FindPoints.IntersectionGroup{ camRayIndices = new int[] { -1, -1, 3, 4 } },
+                new FindPoints.IntersectionGroup{ camRayIndices = new int[] { -1, 2, 3, -1 } },
+            };
+
+            var r = FindPoints.EnforceMatchConsistency(groups);
+        }
+    }
+
+    public void OnExperimentStringChanged(string text)
+    {
+        testsPath = text;
+    }
+    public void OnExperimentCountChanged(string text)
+    {
+        if (int.TryParse(text, out var result))
+        {
+            testsCount = result;
+        }
+    }
+
+    public void OnCameraIdsChanged(string text)
+    {
+        if (int.TryParse(text, out var result))
+        {
+            testsCount = result;
         }
     }
 
@@ -266,8 +413,8 @@ public class Cast : MonoBehaviour
                     nearestNeighbors = foundPoints[pointId].nearestNeighborsPointId.Select(x => x != null ? "{" + string.Join(", ", x) + "}" : "").ToList();
                 }
 
-                pointStrings.Add("{" + string.Join(", ", foundPoints[pointId].pointIds.Select(x =>
-                    $"<| \"camId\"->{x.camId}, \"pointId\"->{pointId}, \"rayId\"->{x.rayId}, \"nearestNeighborsPointId\"->{{{string.Join(", ",foundPoints[pointId].nearestNeighborsPointId[x.camId])}}}, \"nearestNeighborsRayId\"->{{{string.Join(", ", foundPoints[pointId].nearestNeighborsRayId[x.camId])}}}, \"intersectedNeighborsRayId\"->{{{string.Join(", ", foundPoints[pointId].intersectedNeighborsRayId[x.camId])}}}|>")) + "}");
+                //pointStrings.Add("{" + string.Join(", ", foundPoints[pointId].pointIds.Select(x =>
+                //    $"<| \"camId\"->{x.camId}, \"distanceToPoint\"->{foundPoints[pointId].distanceToRay[x.camId].ToString("F15", System.Globalization.CultureInfo.InvariantCulture)}, \"pointId\"->{pointId}, \"rayId\"->{x.rayId}, \"nearestNeighborsPointId\"->{{{string.Join(", ",foundPoints[pointId].nearestNeighborsPointId[x.camId])}}}, \"nearestNeighborsRayId\"->{{{string.Join(", ", foundPoints[pointId].nearestNeighborsRayId[x.camId])}}}, \"intersectedNeighborsRayId\"->{{{string.Join(", ", foundPoints[pointId].intersectedNeighborsRayId[x.camId])}}}|>")) + "}");
 
                 var point = foundPoints[pointId];
 
@@ -288,14 +435,14 @@ public class Cast : MonoBehaviour
 
                 if (drawPointIndex)
                 {
-                    UnityEditor.Handles.color = Color.white;
-                    UnityEditor.Handles.Label(point.point + new Vector3(labelOffset, labelOffset, labelOffset), $"{pointId}");
+                    //UnityEditor.Handles.color = Color.white;
+                    //UnityEditor.Handles.Label(point.point + new Vector3(labelOffset, labelOffset, labelOffset), $"{pointId}");
                 }
 
                 if (drawScoreLabel)
                 {
-                    UnityEditor.Handles.color = Color.white;
-                    UnityEditor.Handles.Label(point.point + new Vector3(labelOffset, labelOffset, labelOffset), $"{point.score}");
+                    //UnityEditor.Handles.color = Color.white;
+                    //UnityEditor.Handles.Label(point.point + new Vector3(labelOffset, labelOffset, labelOffset), $"{point.score}");
                 }
 
                 if (drawPointLabels)
@@ -310,13 +457,17 @@ public class Cast : MonoBehaviour
                         text += $"({point.pointIds[i].camId},{point.pointIds[i].rayId})";
                     }
                     text += "]";
-                    UnityEditor.Handles.color = Color.white;
-                    UnityEditor.Handles.Label(point.point + new Vector3(labelOffset, labelOffset, labelOffset), text);
+                    //UnityEditor.Handles.color = Color.white;
+                    //UnityEditor.Handles.Label(point.point + new Vector3(labelOffset, labelOffset, labelOffset), text);
                 }
             }
         }
 
-        mathematicaString = "{" + string.Join(", ", pointStrings) + "}";
+        //mathematicaString = "{" + string.Join(", ", pointStrings) + "}";
+
+        //if (foundPoints != null) {
+        //    foundPointsString = "{" + string.Join(", ", foundPoints.Select(x => $"{{ {x.point.x.ToString("F15", System.Globalization.CultureInfo.InvariantCulture)}, {x.point.y.ToString("F15", System.Globalization.CultureInfo.InvariantCulture)}, {x.point.z.ToString("F15", System.Globalization.CultureInfo.InvariantCulture)} }}")) + "}";
+        //}
 
         if (drawCameraOpticLines)
         {
