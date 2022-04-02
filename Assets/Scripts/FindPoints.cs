@@ -3,7 +3,11 @@ using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
 using System.Linq;
+using System.Numerics;
 using System.Threading;
+using System.Threading.Tasks;
+using Vector2 = UnityEngine.Vector2;
+using Vector3 = UnityEngine.Vector3;
 
 
 public struct RayIndex
@@ -21,8 +25,12 @@ public struct FoundPoint
 {
     public Vector3 point;
     public RayIndex[] pointIds;
+    public int groupIndex;
+    public FindPoints.Segment segment;
     public float[] distanceToRay;
     public float score;
+    public float maxDistanceFromCenter;
+    public float midDistanceFromCameras;
     public List<int>[] nearestNeighborsRayId;
     public List<int>[] nearestNeighborsPointId;
     public List<int>[] intersectedNeighborsRayId;
@@ -35,9 +43,14 @@ public struct IndexedRay
     public RayIndex pointIndex;
 }
 
+public struct Group
+{
+    public int id;
+}
+
 public static class FindPoints { 
 
-    private struct Segment
+    public struct Segment
     {
         public Vector3 s1;
         public Vector3 s2;
@@ -132,9 +145,86 @@ public static class FindPoints {
         public List<int>[] availablePoints;
     }
 
-    public class IntersectionGroup
+    public struct IntersectionGroup
     {
         public int[] camRayIndices;
+        public int id;
+        public float score;
+    }
+
+    public struct IntersectionGroupRaw
+    {
+        public int[] camRayIndices;
+        public int id;
+    }
+
+    public class Event
+    {
+    }
+
+    public class RayIntersectionEvent : Event
+    {
+        public RayIndex ray1Id;
+        public RayIndex ray2Id;
+        public Segment segment;
+        public int groupId;
+    }
+
+    public class GroupMergeEvent : Event
+    {
+        public int group1Id;
+        public int group2Id;
+        public int groupId;
+        public RayIndex[] rayIndices;
+        public Vector3 point;
+    }
+
+    public class RayDeleteEvent : Event
+    {
+        public int groupId;
+        public RayIndex rayId;
+    }
+
+    public class GroupDeletedDueToRepeatEvent : Event
+    {
+        public int groupId;
+    }
+
+    public class GroupRegisteredAsMax : Event
+    {
+        public int groupId;
+    }
+    public class GroupIsUncotradicted : Event
+    {
+        public int groupId;
+    }
+
+    public class GroupContradictionFound : Event
+    {
+        public int groupId;
+        public int[] groups;
+    }
+
+    public class GroupSelectedAsMostCompact : Event
+    {
+        public int groupId;
+    }
+
+    public class GroupDeleteEvent : Event
+    {
+        public int groupId;
+    }
+
+    public struct IntersectionGroupIterations
+    {
+        public SortedSet<int> rayIndices;
+        public Vector3 middlePoint;
+        public float midDistanceFromCameras;
+    }
+
+    public struct SetIntersectionGroup
+    {
+        public SortedSet<int> camRayIndices;
         public float score;
     }
 
@@ -154,6 +244,26 @@ public static class FindPoints {
     {
         public List<int> nearestNeighbors;
         public List<KeyValuePair<int, int>> availablePoints;
+    }
+
+    public class FilterBasedOnGroupsResultIteration
+    {
+        public List<IntersectionGroup> groups;
+        public int uncotradictedCount;
+        public int contradictedCount;
+    }
+
+    public class FilterBasedOnGroupsResult
+    {
+        public List<IntersectionGroup> intersectionGroups;
+        public List<IntersectionGroup>[] intersectionGroupsIterations;
+        public FilterBasedOnGroupsResultIteration[] iterations;
+    }
+
+    public struct AlgorithmProgress
+    {
+        public int calculatedCount;
+        public int testsCount;
     }
 
     private static NearestNeighborsAndAvailablePoints FindKNearestPointIds(List<Vector2>[] points2D, List<FoundPoint> points3D, int camId, Vector2 point, int k)
@@ -213,7 +323,6 @@ public static class FindPoints {
 
         return consistent;
     }
-
 
     public static MatchConsistencyResult EnforceMatchConsistency(List<IntersectionGroup> groups)
     {
@@ -294,6 +403,106 @@ public static class FindPoints {
         };
     }
 
+    public static List<int[]> FilterSubsets(List<int[]> groups)
+    {
+        var res = new List<int[]>();
+
+        var camsCount = groups.First().Length;
+
+        var rayIndexInGroups = new SortedSet<int>[camsCount][];
+
+        for (var cam_id = 0; cam_id < camsCount; cam_id++)
+        {
+            var rayIndexCount = groups.Max(x => x[cam_id]) + 1;
+
+            rayIndexInGroups[cam_id] = new SortedSet<int>[rayIndexCount];
+
+            for (var rayIndex = 0; rayIndex < rayIndexCount; rayIndex++)
+            {
+                rayIndexInGroups[cam_id][rayIndex] = new SortedSet<int>();
+            }
+        }
+
+        for (var group_id = 0; group_id < groups.Count; group_id++)
+        {
+            for (var cam_id = 0; cam_id < camsCount; cam_id++)
+            {
+                var rayIndex = groups[group_id][cam_id];
+                if (rayIndex >= 0)
+                {
+                    rayIndexInGroups[cam_id][rayIndex].Add(group_id);
+                }
+            }
+        }
+
+        var visitedGroup = new bool[groups.Count];
+
+        for (var group_id = 0; group_id < groups.Count; group_id++)
+        {
+            if (visitedGroup[group_id])
+            {
+                continue;
+            }
+
+            SortedSet<int> intersection = null;
+            for (var cam_id = 0; cam_id < camsCount; cam_id++)
+            {
+                var ray_index = groups[group_id][cam_id];
+                if (ray_index >= 0)
+                {
+                    if (intersection == null)
+                    {
+                        intersection = new SortedSet<int>(rayIndexInGroups[cam_id][ray_index]);
+                    }
+                    else
+                    {
+                        intersection.IntersectWith(rayIndexInGroups[cam_id][ray_index]);
+                    }
+                }
+            }
+
+            if (intersection.Count == 1)
+            {
+                res.Add(groups[group_id]);
+            } 
+            else if (intersection.Count > 1)
+            {
+                bool notSmaller = true;
+                bool identical = true;
+                foreach (var other_group_id in intersection)
+                {
+                    for (var cam_id = 0; cam_id < camsCount; cam_id++)
+                    {
+                        var a = groups[other_group_id][cam_id];
+                        var b = groups[group_id][cam_id];
+                        if (groups[other_group_id][cam_id] >= 0 && groups[group_id][cam_id] < 0)
+                        {
+                            notSmaller = false;
+                            identical = false;
+                            break;
+                        }
+
+                        identical &= a == b;
+                    }
+                }
+
+                if (notSmaller)
+                {
+                    res.Add(groups[group_id]);
+                    if (identical)
+                    {
+                        foreach (var other_group_id in intersection)
+                        {
+                            visitedGroup[other_group_id] = true;
+                        }
+                    }
+                }
+            }
+        }
+
+        return res;
+    }
+
     public static List<IntersectionGroup> FindIntersectionGroups(List<IndexedRay>[] cameraRays, float treshold)
     {
         var res = new List<IntersectionGroup>();
@@ -318,7 +527,12 @@ public static class FindPoints {
                             cameraRays[secondCamId][ray2_id].ray
                         );
 
-                        if (segment.length < treshold)
+                        var midPoint = (segment.s1 + segment.s2) / 2;
+
+                        var midDistance = (Vector3.Distance(cameraRays[firstCamId][ray1_id].ray.origin, midPoint) +
+                                           Vector3.Distance(cameraRays[secondCamId][ray2_id].ray.origin, midPoint)) / 2;
+
+                        if (segment.length < treshold * midDistance)
                         {
                             rayIntersections.Add(new RayIntersection(
                                 secondCamId,
@@ -340,10 +554,6 @@ public static class FindPoints {
                     var set = new Dictionary<int, RayIntersection>();
                     set[rayIntersections[i].camId] = rayIntersections[i];
 
-                    var middle = Vector3.zero;
-
-                    middle += rayIntersections[i].segment.s1 + rayIntersections[i].segment.s2;
-
                     while (j < rayIntersections.Count && rayIntersections[j].distance - rayIntersections[i].distance < treshold)
                     {
                         if (set.ContainsKey(rayIntersections[j].camId))
@@ -352,22 +562,8 @@ public static class FindPoints {
                             continue;
                         }
                         set[rayIntersections[j].camId] = rayIntersections[j];
-                        middle += rayIntersections[j].segment.s1;
-                        middle += rayIntersections[j].segment.s2;
                         ++j;
                     }
-
-                    middle /= set.Count * 2;
-
-                    var variance = 0.0f;
-
-                    foreach (var intersection in set.Values)
-                    {
-                        variance += Mathf.Pow((middle - intersection.segment.s1).magnitude, 2);
-                        variance += Mathf.Pow((middle - intersection.segment.s2).magnitude, 2);
-                    }
-
-                    variance = Mathf.Sqrt(variance / set.Count * 2);
 
                     var camRayIndices = new int[cameraRays.Length];
 
@@ -383,8 +579,7 @@ public static class FindPoints {
                     }
 
                     res.Add(new IntersectionGroup {
-                        camRayIndices = camRayIndices,
-                        score = variance
+                        camRayIndices = camRayIndices
                     });
                 }
             }
@@ -393,49 +588,431 @@ public static class FindPoints {
         return res;
     }
 
-    public static FoundPoint[] GetPoints(List<IndexedRay>[] cameraRays, List<int[]> groups)
+    public static FoundPoint CalculatePoint(List<IndexedRay>[] cameraRays, int[] group)
     {
-        var res = new List<FoundPoint>();
-
         var pointCloud = new Vector3[cameraRays.Length * cameraRays.Length];
 
-        foreach (var group in groups)
+        var pointIds = new List<RayIndex>();
+        var i = 0;
+        for (var cam1_id = 0; cam1_id < cameraRays.Length; cam1_id++)
         {
-            var i = 0;
-            for (var cam1_id = 0; cam1_id < cameraRays.Length; cam1_id++)
+            if (group[cam1_id] < 0)
             {
-                if (group[cam1_id] < 0)
+                continue;
+            }
+
+            pointIds.Add(new RayIndex(cam1_id, group[cam1_id]));
+
+            for (var cam2_id = cam1_id + 1; cam2_id < cameraRays.Length; cam2_id++)
+            {
+                if (group[cam2_id] < 0)
                 {
                     continue;
                 }
 
-                for (var cam2_id = cam1_id + 1; cam2_id < cameraRays.Length; cam2_id++)
+                var segment = findRayIntersection(cameraRays[cam1_id][group[cam1_id]].ray,
+                    cameraRays[cam2_id][group[cam2_id]].ray);
+
+                pointCloud[i++] = segment.s1;
+                pointCloud[i++] = segment.s2;
+            }
+        }
+
+        var middle = pointCloud.Take(i).Aggregate((x, y) => x + y) / i;
+
+        var variance = Mathf.Sqrt(pointCloud.Take(i).Select(x => Mathf.Pow((middle - x).magnitude, 2)).Sum() / pointCloud.Length);
+
+        var maxDistanceFromCenter = pointCloud.Take(i).Max(x => Vector3.Distance(middle, x));
+
+        var raysCount = 0;
+        var midDistanceFromCameras = 0.0f;
+        for (var cam_id = 0; cam_id < cameraRays.Length; cam_id++)
+        {
+            var ray_id = group[cam_id];
+            if (ray_id < 0)
+            {
+                continue;
+            }
+
+            raysCount++;
+
+            midDistanceFromCameras += Vector3.Distance(cameraRays[cam_id][ray_id].ray.origin, middle);
+        }
+
+        midDistanceFromCameras /= raysCount;
+
+        return new FoundPoint
+        {
+            point = middle,
+            score = variance,
+            pointIds = pointIds.ToArray(),
+            maxDistanceFromCenter = maxDistanceFromCenter,
+            midDistanceFromCameras = midDistanceFromCameras
+        };
+    }
+
+    public static void RecalculateGroupScoreIfNeeded(List<IndexedRay>[] cameraRays, ref IntersectionGroup group)
+    {
+        if (group.score > 0)
+        {
+            return;
+        }
+
+        group.score = CalculatePoint(cameraRays, group.camRayIndices).score;
+    }
+
+    public static FoundPoint[] GetPoints(List<IndexedRay>[] cameraRays, List<int[]> groups)
+    {
+        return groups.Select(group => CalculatePoint(cameraRays, group)).ToArray();
+    }
+
+    public static FoundPoint[] GetPoints(List<IndexedRay>[] cameraRays, List<IntersectionGroup> groups)
+    {
+        return groups.Select(group =>
+        {
+            var point = CalculatePoint(cameraRays, group.camRayIndices);
+            point.groupIndex = group.id;
+            return point;
+        }).ToArray();
+    }
+
+    public static FilterBasedOnGroupsResult FilterBasedOnGroups(List<IndexedRay>[] cameraRays, List<IntersectionGroupRaw> _groups, List<Event> events = null)
+    {
+        var res = new List<int>();
+
+        var groups = _groups.Select(x => new IntersectionGroup { camRayIndices = x.camRayIndices, score = 0, id = x.id }).ToList();
+
+        var camsCount = cameraRays.Length;
+
+        //Указывает, в каких группах находится луч [cam_id][ray_index]
+        var rayIndexInGroups = new SortedSet<int>[camsCount][];
+
+        for (var cam_id = 0; cam_id < camsCount; cam_id++)
+        {
+            var rayIndexCount = groups.Max(x => x.camRayIndices[cam_id]) + 1;
+
+            rayIndexInGroups[cam_id] = new SortedSet<int>[rayIndexCount];
+
+            for (var rayIndex = 0; rayIndex < rayIndexCount; rayIndex++)
+            {
+                rayIndexInGroups[cam_id][rayIndex] = new SortedSet<int>();
+            }
+        }
+
+        for (var group_id = 0; group_id < groups.Count; group_id++)
+        {
+            for (var cam_id = 0; cam_id < camsCount; cam_id++)
+            {
+                var rayIndex = groups[group_id].camRayIndices[cam_id];
+                if (rayIndex >= 0)
                 {
-                    if (group[cam2_id] < 0)
+                    rayIndexInGroups[cam_id][rayIndex].Add(group_id);
+                }
+            }
+        }
+
+        var addedGroups = new bool[groups.Count];
+
+        var intersectionGroupIterations = new List<List<IntersectionGroup>>();
+        var resIterations = new List<FilterBasedOnGroupsResultIteration>();
+
+        while (true)
+        {
+            var intersectionGroup = new List<IntersectionGroup>(groups.Count + res.Count);
+
+            for (var group_id = 0; group_id < groups.Count; group_id++)
+            {
+                if (addedGroups[group_id])
+                {
+                    continue;
+                }
+
+                if (groups[group_id].score == 0)
+                {
+                    var group = groups[group_id];
+                    group.score = CalculatePoint(cameraRays, groups[group_id].camRayIndices).score;
+                    groups[group_id] = group;
+                }
+
+                intersectionGroup.Add(new IntersectionGroup{ camRayIndices = (int[])groups[group_id].camRayIndices.Clone(), score = groups[group_id].score });
+            }
+
+            //foreach (var group_id in res)
+            //{
+            //    intersectionGroup.Add(new IntersectionGroup { camRayIndices = (int[])groups[group_id].camRayIndices.Clone(), score = groups[group_id].score });
+            //}
+
+            var maxRayInGroupCount = -1;
+
+            for (var group_id = 0; group_id < groups.Count; group_id++)
+            {
+                if (!addedGroups[group_id])
+                {
+                    var rayCount = groups[group_id].camRayIndices.Count(y => y >= 0);
+                    maxRayInGroupCount = rayCount > maxRayInGroupCount ? rayCount : maxRayInGroupCount;
+                }
+            }
+
+            var maxGroups = new SortedSet<int>();
+
+            // Получаем группы с максимальным количеством пересечений
+            for (var group_id = 0; group_id < groups.Count; group_id++)
+            {
+                if (groups[group_id].camRayIndices.Count(x => x >= 0) == maxRayInGroupCount && !addedGroups[group_id])
+                {
+                    maxGroups.Add(group_id);
+                    if (events != null)
+                    {
+                        events.Add(new GroupRegisteredAsMax { groupId = groups[group_id].id });
+                    }
+                }
+            }
+
+            intersectionGroupIterations.Add(intersectionGroup);
+
+            if (maxGroups.Count == 0)
+            {
+                break;
+            }
+
+            var visitedGroups = new bool[groups.Count];
+
+            var lastEndIndex = res.Count;
+
+            // Выделяем группы, которые являются единственными максимальными на своем луче
+            foreach (var group_id in maxGroups)
+            {
+                if (visitedGroups[group_id])
+                {
+                    continue;
+                }
+
+                bool contradicted = false;
+
+                var contradictedGroups = new SortedSet<int> { group_id };
+
+                for (var cam_id = 0; cam_id < camsCount; cam_id++)
+                {
+                    var ray_id = groups[group_id].camRayIndices[cam_id];
+                    if (ray_id < 0)
                     {
                         continue;
                     }
 
-                    var segment = findRayIntersection(cameraRays[cam1_id][group[cam1_id]].ray,
-                        cameraRays[cam2_id][group[cam2_id]].ray);
+                    var intersection = new SortedSet<int>(rayIndexInGroups[cam_id][ray_id]);
+                    intersection.IntersectWith(maxGroups);
 
-                    pointCloud[i++] = segment.s1;
-                    pointCloud[i++] = segment.s2;
+                    if (intersection.Count > 1)
+                    {
+                        contradicted = true;
+                    }
+
+                    foreach (var contradicted_group_id in intersection)
+                    {
+                        contradictedGroups.Add(contradicted_group_id);
+                        visitedGroups[contradicted_group_id] = true;
+                    }
+                }
+
+                if (!contradicted)
+                {
+                    res.Add(group_id);
+
+                    addedGroups[group_id] = true;
+
+                    if (events != null)
+                    {
+                        events.Add(new GroupIsUncotradicted
+                        {
+                            groupId = groups[group_id].id
+                        });
+                    }
+                }
+                else
+                {
+                    if (events != null)
+                    {
+                        events.Add(new GroupContradictionFound
+                        {
+                            groupId = group_id,
+                            groups = contradictedGroups.ToArray()
+                        });
+                    }
                 }
             }
 
-            var middle = pointCloud.Take(i).Aggregate((x, y) => x + y);
-
-            var variance = Mathf.Sqrt(pointCloud.Take(i).Select(x => Mathf.Pow((middle - x).magnitude, 2)).Sum() / pointCloud.Length);
-
-            res.Add(new FoundPoint
+            for (var res_group_id = lastEndIndex; res_group_id < res.Count; res_group_id++)
             {
-                point = middle,
-                score = variance
+                // Исключаем из всех смежных групп лучи, на которых была образована добавленная группа
+                for (var cam_id = 0; cam_id < camsCount; cam_id++)
+                {
+                    var ray_id = groups[res[res_group_id]].camRayIndices[cam_id];
+
+                    if (ray_id < 0)
+                    {
+                        continue;
+                    }
+
+                    foreach (var another_group_id in rayIndexInGroups[cam_id][ray_id])
+                    {
+                        if (another_group_id == res[res_group_id])
+                        {
+                            continue;
+                        }
+                        
+                        groups[another_group_id].camRayIndices[cam_id] = -1;
+
+                        if (events != null)
+                        {
+                            events.Add(new RayDeleteEvent
+                            {
+                                groupId = groups[another_group_id].id,
+                                rayId = new RayIndex { camId = cam_id, rayId = ray_id }
+                            });
+                        }
+
+                        var rayCount = 0;
+                        for (var cam2_id = 0; cam2_id < cameraRays.Length; cam2_id++)
+                        {
+                            if (groups[another_group_id].camRayIndices[cam2_id] >= 0)
+                            {
+                                rayCount++;
+                            }
+                        }
+
+                        if (rayCount < 2)
+                        {
+                            addedGroups[another_group_id] = true;
+                            if (events != null)
+                            {
+                                events.Add(new GroupDeleteEvent
+                                {
+                                    groupId = groups[another_group_id].id
+                                });
+                            }
+                        }
+
+                        maxGroups.Remove(another_group_id);
+                    }
+
+                    rayIndexInGroups[cam_id][ray_id].Clear();
+
+                    maxGroups.Remove(res[res_group_id]);
+                }
+            }
+
+            var uncontradictedCount = res.Count - lastEndIndex;
+
+            var contradictedGroupsCount = maxGroups.Count;
+
+            // Рассматриваем оставшиеся конфликтующие группы
+            while (maxGroups.Count > 0)
+            {
+                foreach (var group_id in maxGroups)
+                {
+                    if (groups[group_id].score == 0)
+                    {
+                        var group = groups[group_id];
+                        group.score = CalculatePoint(cameraRays, groups[group_id].camRayIndices).score;
+                        groups[group_id] = group;
+                    }
+                }
+
+                // Выбираем наиболее компактную группу
+                var most_compact_group_id = maxGroups.OrderBy(x => groups[x].score).First();
+
+                res.Add(most_compact_group_id);
+                addedGroups[most_compact_group_id] = true;
+
+                if (events != null)
+                {
+                    events.Add(new GroupSelectedAsMostCompact
+                    {
+                        groupId = groups[most_compact_group_id].id
+                    });
+                }
+
+                // Исклюачем из дальнейшего рассмотрения все группы, которые лежат на лучах, которые мы добавили в решение
+                for (var cam_id = 0; cam_id < camsCount; cam_id++)
+                {
+                    var ray_id = groups[most_compact_group_id].camRayIndices[cam_id];
+
+                    if (ray_id < 0)
+                    {
+                        continue;
+                    }
+
+                    foreach (var another_group_id in rayIndexInGroups[cam_id][ray_id])
+                    {
+                        if (another_group_id == most_compact_group_id)
+                        {
+                            continue;
+                        }
+
+                        groups[another_group_id].camRayIndices[cam_id] = -1;
+
+                        if (events != null)
+                        {
+                            events.Add(new RayDeleteEvent
+                            {
+                                groupId = groups[another_group_id].id,
+                                rayId = new RayIndex { camId = cam_id, rayId = ray_id }
+                            });
+                        }
+
+                        var rayCount = 0;
+                        for (var cam2_id = 0; cam2_id < cameraRays.Length; cam2_id++)
+                        {
+                            if (groups[another_group_id].camRayIndices[cam2_id] >= 0)
+                            {
+                                rayCount++;
+                            }
+                        }
+
+                        if (rayCount < 2)
+                        {
+                            addedGroups[another_group_id] = true;
+                            if (events != null)
+                            {
+                                events.Add(new GroupDeleteEvent
+                                {
+                                    groupId = groups[another_group_id].id
+                                });
+                            }
+                        }
+
+                        maxGroups.Remove(another_group_id);
+                    }
+
+                    rayIndexInGroups[cam_id][ray_id].Clear();
+
+                    maxGroups.Remove(most_compact_group_id);
+                }
+            }
+
+            resIterations.Add(new FilterBasedOnGroupsResultIteration
+            {
+                groups = res.Skip(lastEndIndex).Select(x => groups[x]).ToList(),
+                uncotradictedCount = uncontradictedCount,
+                contradictedCount = contradictedGroupsCount
             });
         }
 
-        return res.ToArray();
+        return new FilterBasedOnGroupsResult
+        {
+            intersectionGroups = res.Select(x => groups[x]).ToList(),
+            intersectionGroupsIterations = intersectionGroupIterations.ToArray(),
+            iterations = resIterations.ToArray()
+        };
+    }
+
+    public static FoundPoint[] FindBasedOnGroups(List<IndexedRay>[] cameraRays, float treshold, List<Event> events = null)
+    {
+        var groups = FindIntersectionGroupsBasedOnIterations(cameraRays, treshold, events);
+
+        var filteredGroups = FilterBasedOnGroups(cameraRays, groups, events);
+
+        return GetPoints(cameraRays, filteredGroups.intersectionGroups);
     }
 
     public static FoundPoint[] FindBasedOnPaper(List<IndexedRay>[] cameraRays, float treshold)
@@ -445,6 +1022,300 @@ public static class FindPoints {
         var matches = EnforceMatchConsistency(groups);
 
         return GetPoints(cameraRays, matches.consistentGroups);
+    }
+
+    //private bool IsIntersect(List<IndexedRay>[] cameraRays, float treshold, int[] group, out Vector3 midPoint, out float maxDistance)
+    //{
+    //    midPoint = Vector3.zero;
+
+    //    for (var cam1_id = 0; cam1_id < cameraRays.Length; cam1_id++)
+    //    {
+    //        var ray1_id = group[cam1_id];
+
+    //        if (ray1_id < 0)
+    //        {
+    //            continue;
+    //        }
+
+    //        for (var cam2_id = cam1_id + 1; cam2_id < cameraRays.Length; cam2_id++)
+    //        {
+    //            var ray2_id = group[cam2_id];
+
+    //            if (ray2_id < 0)
+    //            {
+    //                continue;
+    //            }
+
+    //            var segment = findRayIntersection(
+    //                cameraRays[cam1_id][ray1_id].ray,
+    //                cameraRays[cam2_id][ray2_id].ray
+    //            );
+
+    //            var midPoint = (segment.s1 + segment.s2) / 2;
+
+    //            var midDistance = (Vector3.Distance(cameraRays[cam1_id][ray1_id].ray.origin, midPoint) +
+    //                               Vector3.Distance(cameraRays[cam2_id][ray2_id].ray.origin, midPoint)) / 2;
+
+    //            if (segment.length < treshold * midDistance)
+    //            {
+    //                rayIntersections.Add(new RayIntersection(
+    //                    secondCamId,
+    //                    ray2_id,
+    //                    Vector3.Distance(segment.s1, cameraRays[firstCamId][ray1_id].ray.origin),
+    //                    segment,
+    //                    cameraRays[firstCamId][ray1_id].pointIndex,
+    //                    cameraRays[secondCamId][ray2_id].pointIndex
+    //                ));
+    //            }
+    //        }
+    //    }
+    //}
+
+
+    // Новый красивый алгоритм
+    public static List<IntersectionGroupRaw> FindIntersectionGroupsBasedOnIterations(List<IndexedRay>[] cameraRays, float treshold, List<Event> events = null)
+    {
+        var groups = new List<IntersectionGroupIterations>();
+
+        var group = new int[cameraRays.Length];
+
+        for (var cam_id = 0; cam_id < cameraRays.Length; cam_id++)
+        {
+            group[cam_id] = -1;
+        }
+
+        var camRayIdToRayId = new int[cameraRays.Length][];
+        var rayIdToCamRayId = new List<RayIndex>();
+
+        for (var cam_id = 0; cam_id < cameraRays.Length; cam_id++)
+        {
+            camRayIdToRayId[cam_id] = new int[cameraRays[cam_id].Count];
+
+            for (var ray_id = 0; ray_id < cameraRays[cam_id].Count; ray_id++)
+            {
+                rayIdToCamRayId.Add(new RayIndex(cam_id, ray_id));
+                camRayIdToRayId[cam_id][ray_id] = rayIdToCamRayId.Count - 1;
+            }
+        }
+
+        for (var cam1_id = 0; cam1_id < cameraRays.Length; cam1_id++)
+        {
+            for (var ray1_id = 0; ray1_id < cameraRays[cam1_id].Count; ray1_id++)
+            {
+                for (var cam2_id = cam1_id + 1; cam2_id < cameraRays.Length; cam2_id++)
+                {
+                    for (var ray2_id = 0; ray2_id < cameraRays[cam2_id].Count; ray2_id++)
+                    {
+                        group[cam1_id] = ray1_id;
+                        group[cam2_id] = ray2_id;
+
+                        var point = CalculatePoint(cameraRays, group);
+
+                        group[cam1_id] = -1;
+                        group[cam2_id] = -1;
+
+                        if (point.maxDistanceFromCenter < treshold * point.midDistanceFromCameras)
+                        {
+                            groups.Add(new IntersectionGroupIterations
+                            { 
+                                rayIndices = new SortedSet<int> {
+                                    camRayIdToRayId[cam1_id][ray1_id],
+                                    camRayIdToRayId[cam2_id][ray2_id],
+                                },
+                                middlePoint = point.point,
+                                midDistanceFromCameras = point.midDistanceFromCameras
+                            });
+
+                            if (events != null)
+                            {
+                                events.Add(new RayIntersectionEvent
+                                {
+                                    groupId = groups.Count - 1,
+                                    ray1Id = new RayIndex(cam1_id, ray1_id),
+                                    ray2Id = new RayIndex(cam2_id, ray2_id),
+                                    segment = findRayIntersection(cameraRays[cam1_id][ray1_id].ray,
+                                        cameraRays[cam2_id][ray2_id].ray)
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        var deletedGroups = new List<bool>(groups.Count);
+        deletedGroups.AddRange(Enumerable.Repeat(false, groups.Count));
+
+        var groupByRayId = new SortedSet<int>[rayIdToCamRayId.Count];
+        for (var ray_id = 0; ray_id < rayIdToCamRayId.Count; ray_id++)
+        {
+            groupByRayId[ray_id] = new SortedSet<int>();
+        }
+
+        var uniqueGroups = new HashSet<SortedSet<int>>(SortedSet<int>.CreateSetComparer());
+
+        var lastEndIndex = 0;
+        for (var iter_id = 3; iter_id < cameraRays.Length + 1; iter_id++)
+        {
+            for (var ray_id = 0; ray_id < cameraRays.Length; ray_id++)
+            {
+                group[ray_id] = -1;
+            }
+
+            var lastStartIndex = lastEndIndex;
+            lastEndIndex = groups.Count;
+
+            foreach (var sortedSet in groupByRayId)
+            {
+                sortedSet.Clear();
+            }
+
+            for (var group_id = lastStartIndex; group_id < lastEndIndex; group_id++)
+            {
+                foreach (var rayIndex in groups[group_id].rayIndices)
+                {
+                    groupByRayId[rayIndex].Add(group_id);
+                }
+            }
+
+            for (var group_id = lastStartIndex; group_id < lastEndIndex; group_id++)
+            {
+                foreach (var ray_id in groups[group_id].rayIndices)
+                {
+                    foreach (var another_group_id in groupByRayId[ray_id])
+                    {
+                        if (group_id == another_group_id)
+                        {
+                            continue;
+                        }
+
+                        if (deletedGroups[another_group_id])
+                        {
+                            continue;
+                        }
+
+                        var distance = Vector3.Distance(groups[group_id].middlePoint,
+                            groups[another_group_id].middlePoint);
+
+                        var localTreshold = treshold * 2 * (groups[group_id].midDistanceFromCameras +
+                                                             groups[another_group_id].midDistanceFromCameras) / 2;
+
+                        if (distance > localTreshold)
+                        {
+                            continue;
+                        }
+
+                        var unionRayIndices = new SortedSet<int>(groups[group_id].rayIndices);
+                        unionRayIndices.UnionWith(groups[another_group_id].rayIndices);
+
+                        for (var cam_id = 0; cam_id < cameraRays.Length; cam_id++)
+                        {
+                            group[cam_id] = -1;
+                        }
+
+                        var contradicted = false;
+                        foreach (var cam_id2 in unionRayIndices.Select(x => rayIdToCamRayId[x].camId).ToList())
+                        {
+                            if (group[cam_id2] > 0)
+                            {
+                                contradicted = true;
+                                break;
+                            }
+                            group[cam_id2] = 1;
+                        }
+
+                        for (var cam_id = 0; cam_id < cameraRays.Length; cam_id++)
+                        {
+                            group[cam_id] = -1;
+                        }
+
+                        if (contradicted)
+                        {
+                            continue;
+                        }
+
+                        var intersectRayIndices = new SortedSet<int>(groups[group_id].rayIndices);
+
+                        intersectRayIndices.IntersectWith(groups[another_group_id].rayIndices);
+
+                        if (uniqueGroups.Contains(unionRayIndices))
+                        {
+                            deletedGroups[another_group_id] = true;
+                            if (events != null)
+                            {
+                                events.Add(new GroupDeletedDueToRepeatEvent
+                                {
+                                    groupId = another_group_id
+                                });
+                            }
+                            continue;
+                        }
+
+                        foreach (var ray_id2 in unionRayIndices)
+                        {
+                            var rayIndex = rayIdToCamRayId[ray_id2];
+                            group[rayIndex.camId] = rayIndex.rayId;
+                        }
+
+                        var point = CalculatePoint(cameraRays, group);
+
+                        for (var cam_id = 0; cam_id < cameraRays.Length; cam_id++)
+                        {
+                            group[cam_id] = -1;
+                        }
+
+                        if (point.maxDistanceFromCenter < point.midDistanceFromCameras * treshold)
+                        {
+                            if (intersectRayIndices.Count != 0 && intersectRayIndices.Count != iter_id - 2)
+                            {
+                                throw new SystemException("ERROR");
+                            }
+
+                            deletedGroups[group_id] = true;
+                            deletedGroups[another_group_id] = true;
+
+                            groups.Add(new IntersectionGroupIterations
+                            {
+                                middlePoint = point.point,
+                                rayIndices = unionRayIndices,
+                                midDistanceFromCameras = point.midDistanceFromCameras
+                            });
+
+                            if (events != null)
+                            {
+                                events.Add(new GroupMergeEvent
+                                {
+                                    group1Id = group_id,
+                                    group2Id = another_group_id,
+                                    groupId = groups.Count - 1,
+                                    point = point.point,
+                                    rayIndices = unionRayIndices.Select(x => rayIdToCamRayId[x]).ToArray()
+                                });
+                            }
+
+                            deletedGroups.Add(false);
+                            uniqueGroups.Add(unionRayIndices);
+                        }
+                    }
+                }
+            }
+        }
+
+        return groups.Select((x, i) => new Tuple<int, IntersectionGroupIterations>(i, x)).Where(x => !deletedGroups[x.Item1]).Select(x =>
+        {
+            var _group = new int[cameraRays.Length];
+            for (var cam_id = 0; cam_id < cameraRays.Length; cam_id++)
+            {
+                _group[cam_id] = -1;
+            }
+
+            foreach (var ray_id in x.Item2.rayIndices)
+            {
+                _group[rayIdToCamRayId[ray_id].camId] = rayIdToCamRayId[ray_id].rayId;
+            }
+
+            return new IntersectionGroupRaw { camRayIndices = _group, id = x.Item1 };
+        }).ToList();
     }
 
     /*
@@ -780,7 +1651,12 @@ public static class FindPoints {
                             cameraRays[secondCamId][ray2_id].ray
                         );
 
-                        if (segment.length < treshold)
+                        var midPoint = (segment.s1 + segment.s2) / 2;
+
+                        var midDistance = (Vector3.Distance(cameraRays[bestCamId][ray1_id].ray.origin, midPoint) +
+                                           Vector3.Distance(cameraRays[secondCamId][ray2_id].ray.origin, midPoint)) / 2;
+
+                        if (segment.length < treshold * midDistance)
                         {
                             rayIntersections.Add(new RayIntersection(
                                 secondCamId,

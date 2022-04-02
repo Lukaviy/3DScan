@@ -1,9 +1,13 @@
-﻿using System.Collections;
+﻿using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.Globalization;
+using System.IO;
 using System.Linq;
 using System.Runtime.Serialization.Formatters;
 using System.Text.RegularExpressions;
+using System.Threading;
+using System.Threading.Tasks;
 using UnityEngine;
 
 public static class MathematicaRayLoader
@@ -285,6 +289,39 @@ public static class MathematicaRayLoader
         return result;
     }
 
+    public struct LoadTestsProgress
+    {
+        public int loaded;
+        public int count;
+    }
+
+    public struct ExperimentData
+    {
+        public List<TestResult> tests;
+        public CamPosData[] cameras;
+    }
+
+    public static ExperimentData LoadTestsResults(string path, int[] camsIndices, CancellationToken token, IProgress<LoadTestsProgress> progress)
+    {
+        var r = new Regex(@"test_(\d+)");
+        var testsCount = Directory.GetDirectories(path).Select(x => { var t = r.Match(x);
+            return t.Success ? int.Parse(t.Groups[1].Value) : -1;
+        }).Max() + 1;
+
+        var camPoses = LoadCamPosData($"{path}/test_0", camsIndices);
+
+        var result = new ExperimentData{ tests = new List<TestResult>(), cameras = camPoses };
+
+        for (var test_id = 0; test_id < testsCount; test_id++)
+        {
+            token.ThrowIfCancellationRequested();
+            result.tests.Add(LoadTestResult($"{path}/test_{test_id}", camPoses, camsIndices));
+            progress.Report(new LoadTestsProgress{ loaded = test_id, count = testsCount });
+        }
+
+        return result;
+    }
+
     public static void SavePoints(string path, List<Vector3> points)
     {
         System.IO.File.WriteAllLines(path, points.Select(point => $"{point.x.ToString(CultureInfo.InvariantCulture)}, {point.y.ToString(CultureInfo.InvariantCulture)}, {point.z.ToString(CultureInfo.InvariantCulture)}").ToArray());
@@ -293,5 +330,15 @@ public static class MathematicaRayLoader
     public static void SavePoints(string path, List<FoundPoint> points)
     {
         System.IO.File.WriteAllLines(path, points.Select(point => $"{point.point.x.ToString(CultureInfo.InvariantCulture)}, {point.point.y.ToString(CultureInfo.InvariantCulture)}, {point.point.z.ToString(CultureInfo.InvariantCulture)}, {point.score.ToString(CultureInfo.InvariantCulture)}").ToArray());
+    }
+
+    public static void SaveIntersectionGroups(string path, List<FindPoints.IntersectionGroup> groups)
+    {
+        System.IO.File.WriteAllLines(path, groups.Select(group => $"{String.Join(", ", group.camRayIndices.Select(x => x.ToString(CultureInfo.InvariantCulture)))}, {group.score.ToString(CultureInfo.InvariantCulture)}").ToArray());
+    }
+
+    public static void SavePointsWithFullInfo(string path, FoundPoint[] points)
+    {
+        System.IO.File.WriteAllLines(path, points.Select(point => $"{point.point.x.ToString(CultureInfo.InvariantCulture)}, {point.point.y.ToString(CultureInfo.InvariantCulture)}, {point.point.z.ToString(CultureInfo.InvariantCulture)}, {point.score.ToString(CultureInfo.InvariantCulture)}, {String.Join(", ", point.pointIds.Select(y => $"{y.camId}, {y.rayId}"))}").ToArray());
     }
 }

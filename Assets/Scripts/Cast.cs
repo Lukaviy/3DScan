@@ -1,7 +1,10 @@
-﻿using System.Collections;
+﻿using System;
+using System.Collections;
 using System.Collections.Generic;
+using System.Globalization;
 using UnityEngine;
 using System.Linq;
+using Random = UnityEngine.Random;
 
 
 public class Cast : MonoBehaviour
@@ -42,6 +45,7 @@ public class Cast : MonoBehaviour
         NearestNeighborsWithout,
         NearestNeighborsWithDistances,
         Paper,
+        Groups,
     }
 
     public Transform[] cameras;
@@ -75,6 +79,8 @@ public class Cast : MonoBehaviour
     public int pointIndex = -1;
     public int drawImportedRaysWithIntersectionsCountMin = 2;
     public int drawImportedRaysWithIntersectionsCountMax = 4;
+    public int drawGroupsIntersectionsCountMin = 2;
+    public int drawGroupsIntersectionsCountMax = 4;
     public float importedRayLength = 2.0f;
     public string mathematicaString;
     public string foundPointsString;
@@ -85,6 +91,8 @@ public class Cast : MonoBehaviour
     public List<int> cameraIds;
     public List<string> nearestNeighbors;
     public Algorithm algorithm;
+
+    public GameObject pointPrefab;
 
 
     Vector3[] laserPoints;
@@ -115,6 +123,24 @@ public class Cast : MonoBehaviour
                 //var noiseDistance = Random.Range(0, noise);
                 //var noiseAngle = Random.Range(0, 2 * Mathf.PI);
                 res[camId].Add(new IndexedRay { ray = new Ray(cameras[camId].position, direction), pointIndex = new RayIndex(camId, rayId) });
+            }
+        }
+
+        return res;
+    }
+
+    List<GameObject> InstantiatePoints(FoundPoint[][] points)
+    {
+        var res = new List<GameObject>();
+        foreach (var test in points)
+        {
+            foreach (var point in test)
+            {
+                var obj = Instantiate(pointPrefab, point.point, Quaternion.identity);
+
+                obj.isStatic = true;
+
+                res.Add(obj);
             }
         }
 
@@ -154,73 +180,73 @@ public class Cast : MonoBehaviour
 
         noisedRays = GetIndexedRays(intersectedLaserPoints, cameraRays, RaysNoise);
 
-        if (Input.GetKeyDown(KeyCode.N))
-        {
-            foundPoints = FindPoints.FindNew(noisedRays, Treshold);
-        }
+        //if (Input.GetKeyDown(KeyCode.N))
+        //{
+        //    foundPoints = FindPoints.FindNew(noisedRays, Treshold);
+        //}
 
-        if (Input.GetKeyDown(KeyCode.Space))
-        {
-            foundPoints = FindPoints.Find(noisedRays, Treshold);
-        }
+        //if (Input.GetKeyDown(KeyCode.Space))
+        //{
+        //    foundPoints = FindPoints.Find(noisedRays, Treshold);
+        //}
 
-        if (Input.GetKeyDown(KeyCode.A))
-        {
-            foundPoints = FindPoints.FindOld(noisedRays, Treshold);
-        }
+        //if (Input.GetKeyDown(KeyCode.A))
+        //{
+        //    foundPoints = FindPoints.FindOld(noisedRays, Treshold);
+        //}
 
-        if (Input.GetKeyDown(KeyCode.P))
-        {
-            importedCameraRays = MathematicaRayLoader.LoadCamVectors(@"C:\projects\python_side\test", 4);
-            foundPoints = FindPoints.FindNew(importedCameraRays, Treshold);
-        }
+        //if (Input.GetKeyDown(KeyCode.P))
+        //{
+        //    importedCameraRays = MathematicaRayLoader.LoadCamVectors(@"C:\projects\python_side\test", 4);
+        //    foundPoints = FindPoints.FindNew(importedCameraRays, Treshold);
+        //}
 
-        if (Input.GetKeyDown(KeyCode.O))
-        {
-            importedCameraRays = MathematicaRayLoader.LoadCamVectors(@"C:\projects\python_side\test", 4);
-            var importedCameraPoints = MathematicaRayLoader.LoadCamPoints(@"C:\projects\python_side\test", 4);
-            foundPoints = FindPoints.FindBasedOnKNearestNeighbors(importedCameraRays, Treshold, importedCameraPoints, kNearestNeighbors, kMinNearestNeighbors);
-        }
+        //if (Input.GetKeyDown(KeyCode.O))
+        //{
+        //    importedCameraRays = MathematicaRayLoader.LoadCamVectors(@"C:\projects\python_side\test", 4);
+        //    var importedCameraPoints = MathematicaRayLoader.LoadCamPoints(@"C:\projects\python_side\test", 4);
+        //    foundPoints = FindPoints.FindBasedOnKNearestNeighbors(importedCameraRays, Treshold, importedCameraPoints, kNearestNeighbors, kMinNearestNeighbors);
+        //}
 
-        if (Input.GetKeyDown(KeyCode.U))
-        {
-            importedCameraRays = MathematicaRayLoader.LoadCamVectors(@"C:\projects\python_side\test", 4);
-            var importedCameraPoints = MathematicaRayLoader.LoadCamPoints(@"C:\projects\python_side\test", 4);
-            foundPoints = FindPoints.FindBasedOnKNearestNeighborsWithout(importedCameraRays, Treshold, importedCameraPoints, kNearestNeighbors, kMinNearestNeighbors);
-        }
+        //if (Input.GetKeyDown(KeyCode.U))
+        //{
+        //    importedCameraRays = MathematicaRayLoader.LoadCamVectors(@"C:\projects\python_side\test", 4);
+        //    var importedCameraPoints = MathematicaRayLoader.LoadCamPoints(@"C:\projects\python_side\test", 4);
+        //    foundPoints = FindPoints.FindBasedOnKNearestNeighborsWithout(importedCameraRays, Treshold, importedCameraPoints, kNearestNeighbors, kMinNearestNeighbors);
+        //}
 
-        if (Input.GetKeyDown(KeyCode.R))
-        {
-            var tests = MathematicaRayLoader.LoadTestsResults(testsPath, 1, new[] { 0, 1, 2, 3 });
-            importedCameraRays = tests[0].rays;
-            foundPoints = FindPoints.FindBasedOnKNearestNeighborsWithout(importedCameraRays, Treshold,
-                tests[0].camPoints, kNearestNeighbors, kMinNearestNeighbors);
-        }
+        //if (Input.GetKeyDown(KeyCode.R))
+        //{
+        //    var tests = MathematicaRayLoader.LoadTestsResults(testsPath, 1, new[] { 0, 1, 2, 3 });
+        //    importedCameraRays = tests[0].rays;
+        //    foundPoints = FindPoints.FindBasedOnKNearestNeighborsWithout(importedCameraRays, Treshold,
+        //        tests[0].camPoints, kNearestNeighbors, kMinNearestNeighbors);
+        //}
 
-        if (Input.GetKeyDown(KeyCode.Q))
-        {
-            var tests = camPosesPath.Length == 0
-                ? MathematicaRayLoader.LoadTestsResults(testsPath, testsCount, cameraIds.ToArray())
-                : MathematicaRayLoader.LoadTestsResults(testsPath, camPosesPath, testsCount, cameraIds.ToArray());
+        //if (Input.GetKeyDown(KeyCode.Q))
+        //{
+        //    var tests = camPosesPath.Length == 0
+        //        ? MathematicaRayLoader.LoadTestsResults(testsPath, testsCount, cameraIds.ToArray())
+        //        : MathematicaRayLoader.LoadTestsResults(testsPath, camPosesPath, testsCount, cameraIds.ToArray());
 
-            var points = tests.AsParallel().Select(test => FindPoints.FindBasedOnKNearestNeighbors(
-                    test.rays, Treshold,
-                    test.camPoints, kNearestNeighbors, kMinNearestNeighbors))
-                .ToArray();
+        //    var points = tests.AsParallel().Select(test => FindPoints.FindBasedOnKNearestNeighbors(
+        //            test.rays, Treshold,
+        //            test.camPoints, kNearestNeighbors, kMinNearestNeighbors))
+        //        .ToArray();
 
-            //var points = tests.AsParallel().Select(test => FindPoints.FindBasedOnKNearestNeighborsWithout(
-            //        test.rays, Treshold,
-            //        test.camPoints, kNearestNeighbors, kMinNearestNeighbors))
-            //    .ToArray();
+        //    //var points = tests.AsParallel().Select(test => FindPoints.FindBasedOnKNearestNeighborsWithout(
+        //    //        test.rays, Treshold,
+        //    //        test.camPoints, kNearestNeighbors, kMinNearestNeighbors))
+        //    //    .ToArray();
 
-            foundPoints = points[0];
+        //    foundPoints = points[0];
 
-            for (var test_id = 0; test_id < points.Length; test_id++)
-            {
-                System.IO.Directory.CreateDirectory($"{testsPath}/{outputPath}/result");
-                MathematicaRayLoader.SavePoints($"{testsPath}/{outputPath}/result/test_{test_id}.csv", points[test_id].ToList());
-            }
-        }
+        //    for (var test_id = 0; test_id < points.Length; test_id++)
+        //    {
+        //        System.IO.Directory.CreateDirectory($"{testsPath}/{outputPath}/result");
+        //        MathematicaRayLoader.SavePoints($"{testsPath}/{outputPath}/result/test_{test_id}.csv", points[test_id].ToList());
+        //    }
+        //}
 
         if (Input.GetKeyDown(KeyCode.F))
         {
@@ -237,9 +263,12 @@ public class Cast : MonoBehaviour
                 algorithm == Algorithm.NearestNeighborsWithout ?
                 tests.AsParallel().Select(test => FindPoints.FindBasedOnKNearestNeighborsWithout(test.rays, Treshold,
                     test.camPoints, kNearestNeighbors, kMinNearestNeighbors)).ToArray() :
-                tests.AsParallel().Select(test => FindPoints.FindBasedOnPaper(test.rays, Treshold)).ToArray();
+                algorithm == Algorithm.Paper ? tests.AsParallel().Select(test => FindPoints.FindBasedOnPaper(test.rays, Treshold)).ToArray() :
+                    tests.AsParallel().Select(test => FindPoints.FindBasedOnGroups(test.rays, Treshold)).ToArray();
 
-            foundPoints = points[0];
+            foundPoints = points.SelectMany(x => x).ToArray();
+
+            InstantiatePoints(points);
 
             var camsName = "";
 
@@ -257,7 +286,7 @@ public class Cast : MonoBehaviour
             }
         }
 
-        if (Input.GetKeyDown(KeyCode.W))
+        if (Input.GetKeyDown(KeyCode.Z))
         {
             var camPoses = MathematicaRayLoader.LoadCamPosData(camPosesPath, cameraIds.ToArray());
             var test = MathematicaRayLoader.LoadTestResult($"{testsPath}/test_{testsCount}", camPoses, cameraIds.ToArray());
@@ -271,24 +300,102 @@ public class Cast : MonoBehaviour
                 algorithm == Algorithm.NearestNeighborsWithout ?
                 FindPoints.FindBasedOnKNearestNeighborsWithout(test.rays, Treshold,
                     test.camPoints, kNearestNeighbors, kMinNearestNeighbors) :
-                FindPoints.FindBasedOnPaper(test.rays, Treshold);
+                algorithm == Algorithm.Paper ? FindPoints.FindBasedOnPaper(test.rays, Treshold) : FindPoints.FindBasedOnGroups(test.rays, Treshold).ToArray();
 
             foundPoints = points;
         }
 
-        if (Input.GetKeyDown(KeyCode.T))
-        {
-            var groups = new List<FindPoints.IntersectionGroup>
-            {
-                new FindPoints.IntersectionGroup{ camRayIndices = new int[] { 1, -1, 3, -1 } },
-                new FindPoints.IntersectionGroup{ camRayIndices = new int[] { -1, 2, -1, 4 } },
-                new FindPoints.IntersectionGroup{ camRayIndices = new int[] { 1, 2, -1, -1 } },
-                new FindPoints.IntersectionGroup{ camRayIndices = new int[] { -1, -1, 3, 4 } },
-                new FindPoints.IntersectionGroup{ camRayIndices = new int[] { -1, 2, 3, -1 } },
-            };
+        //if (Input.GetKeyDown(KeyCode.T))
+        //{
+        //    var groups = new List<FindPoints.IntersectionGroup>
+        //    {
+        //        new FindPoints.IntersectionGroup{ camRayIndices = new int[] { 1, -1, 3, -1 } },
+        //        new FindPoints.IntersectionGroup{ camRayIndices = new int[] { -1, 2, -1, 4 } },
+        //        new FindPoints.IntersectionGroup{ camRayIndices = new int[] { 1, 2, -1, -1 } },
+        //        new FindPoints.IntersectionGroup{ camRayIndices = new int[] { -1, -1, 3, 4 } },
+        //        new FindPoints.IntersectionGroup{ camRayIndices = new int[] { -1, 2, 3, -1 } },
+        //    };
 
-            var r = FindPoints.EnforceMatchConsistency(groups);
-        }
+        //    var r = FindPoints.EnforceMatchConsistency(groups);
+        //}
+
+        //if (Input.GetKeyDown(KeyCode.B))
+        //{
+        //    var tests = camPosesPath.Length == 0
+        //        ? MathematicaRayLoader.LoadTestsResults(testsPath, testsCount, cameraIds.ToArray())
+        //        : MathematicaRayLoader.LoadTestsResults(testsPath, camPosesPath, testsCount, cameraIds.ToArray());
+
+        //    var groups = tests.Select(test => FindPoints.FilterBasedOnGroups(test.rays, FindPoints.FindIntersectionGroupsBasedOnIterations(test.rays, Treshold))).ToArray();
+
+        //    var groups_points = groups.Zip(tests, (group, test) => group.intersectionGroupsIterations.Select(y => FindPoints.GetPoints(test.rays, y.Select(x => x.camRayIndices).ToList())).ToArray()).ToArray();
+        //    var res_points = groups.Zip(tests, (group, test) => group.iterations.Select(y => FindPoints.GetPoints(test.rays, y.groups.Select(x => x.camRayIndices).ToList())).ToArray()).ToArray();
+
+        //    var camsName = "";
+
+        //    foreach (var cam_id in cameraIds)
+        //    {
+        //        camsName += cam_id.ToString();
+        //    }
+
+        //    for (var test_id = 0; test_id < groups.Length; test_id++)
+        //    {
+        //        if (groups_points[test_id][0].Length < 10)
+        //        {
+        //            continue;
+        //        }
+
+        //        for (var iter_id = 0; iter_id < groups_points[test_id].Length; iter_id++)
+        //        {
+        //            System.IO.Directory.CreateDirectory($"{testsPath}/intersectionGroups/groups{camsName}/iter_{iter_id}");
+        //            MathematicaRayLoader.SavePointsWithFullInfo($"{testsPath}/intersectionGroups/groups{camsName}/iter_{iter_id}/test_{test_id}.csv", groups_points[test_id][iter_id]);
+        //        }
+
+        //        for (var iter_id = 0; iter_id < res_points[test_id].Length; iter_id++)
+        //        {
+        //            System.IO.Directory.CreateDirectory($"{testsPath}/intersectionGroups/res{camsName}/iter_{iter_id}");
+        //            MathematicaRayLoader.SavePointsWithFullInfo($"{testsPath}/intersectionGroups/res{camsName}/iter_{iter_id}/test_{test_id}.csv", res_points[test_id][iter_id]);
+        //            System.IO.File.WriteAllText($"{testsPath}/intersectionGroups/res{camsName}/iter_{iter_id}/test_{test_id}_uncontradictedCount.csv", groups[test_id].iterations[iter_id].uncotradictedCount.ToString());
+        //            System.IO.File.WriteAllText($"{testsPath}/intersectionGroups/res{camsName}/iter_{iter_id}/test_{test_id}_contradictedCount.csv", groups[test_id].iterations[iter_id].contradictedCount.ToString());
+        //        }
+        //    }
+        //}
+
+        //if (Input.GetKeyDown(KeyCode.H))
+        //{
+        //    var tests = camPosesPath.Length == 0
+        //        ? MathematicaRayLoader.LoadTestsResults(testsPath, testsCount, cameraIds.ToArray())
+        //        : MathematicaRayLoader.LoadTestsResults(testsPath, camPosesPath, testsCount, cameraIds.ToArray());
+
+        //    var groups = tests.Select(test => FindPoints.FilterBasedOnGroups(test.rays, FindPoints.FindIntersectionGroupsBasedOnIterations(test.rays, Treshold)).intersectionGroups).ToArray();
+
+        //    for (var test_id = 0; test_id < groups.Length; test_id++)
+        //    {
+        //        var filteredGroups = FindPoints.FilterSubsets(groups[test_id].Select(x => x.camRayIndices).ToList());
+
+        //        if (filteredGroups.Count != groups[test_id].Count)
+        //        {
+        //            Debug.Log($"{test_id}, {groups[test_id].Count}, {filteredGroups.Count}");
+        //        }
+        //    }
+        //}
+
+        //if (Input.GetKeyDown(KeyCode.Y))
+        //{
+        //    var camPoses = MathematicaRayLoader.LoadCamPosData(camPosesPath, cameraIds.ToArray());
+        //    var test = MathematicaRayLoader.LoadTestResult($"{testsPath}/test_{testsCount}", camPoses, cameraIds.ToArray());
+
+        //    var intersectionGroups = FindPoints.FindIntersectionGroupsBasedOnIterations(test.rays, Treshold);
+
+        //    foundPoints = FindPoints.GetPoints(test.rays, intersectionGroups).ToArray();
+
+        //    var filteredGroups = FindPoints.FilterSubsets(intersectionGroups);
+
+        //    Debug.Log($"{foundPoints.Length}, {filteredGroups.Count}");
+
+        //    //foundPoints = FindPoints.GetPoints(test.rays, filteredGroups).ToArray();
+
+        //    importedCameraRays = test.rays;
+        //}
     }
 
     public void OnExperimentStringChanged(string text)
@@ -410,13 +517,19 @@ public class Cast : MonoBehaviour
 
                 if (pointIndex != -1)
                 { 
-                    nearestNeighbors = foundPoints[pointId].nearestNeighborsPointId.Select(x => x != null ? "{" + string.Join(", ", x) + "}" : "").ToList();
+                    //nearestNeighbors = foundPoints[pointId].nearestNeighborsPointId.Select(x => x != null ? "{" + string.Join(", ", x) + "}" : "").ToList();
                 }
 
                 //pointStrings.Add("{" + string.Join(", ", foundPoints[pointId].pointIds.Select(x =>
                 //    $"<| \"camId\"->{x.camId}, \"distanceToPoint\"->{foundPoints[pointId].distanceToRay[x.camId].ToString("F15", System.Globalization.CultureInfo.InvariantCulture)}, \"pointId\"->{pointId}, \"rayId\"->{x.rayId}, \"nearestNeighborsPointId\"->{{{string.Join(", ",foundPoints[pointId].nearestNeighborsPointId[x.camId])}}}, \"nearestNeighborsRayId\"->{{{string.Join(", ", foundPoints[pointId].nearestNeighborsRayId[x.camId])}}}, \"intersectedNeighborsRayId\"->{{{string.Join(", ", foundPoints[pointId].intersectedNeighborsRayId[x.camId])}}}|>")) + "}");
 
                 var point = foundPoints[pointId];
+
+                if (point.pointIds.Length < drawGroupsIntersectionsCountMin ||
+                    point.pointIds.Length > drawGroupsIntersectionsCountMax)
+                {
+                    continue;
+                }
 
                 if (foundPointsDrawType == FoundPointsDrawType.FoundOrder)
                 {
@@ -429,7 +542,7 @@ public class Cast : MonoBehaviour
                 }
                 if (foundPointsDrawType == FoundPointsDrawType.IntersectionsCount)
                 {
-                    Gizmos.color = Color.HSVToRGB(1 - point.pointIds.Length / (1.0f * importedCameraRays.Length), 1, 1);
+                    Gizmos.color = Color.HSVToRGB(1 - point.pointIds.Length / (1.0f * cameraRays.Length), 1, 1);
                 }
                 Gizmos.DrawSphere(point.point, drawSizeAsScore ? point.score * sphereRadius : sphereRadius);
 
