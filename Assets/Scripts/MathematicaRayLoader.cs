@@ -322,6 +322,31 @@ public static class MathematicaRayLoader
         return result;
     }
 
+    public enum ImageType
+    {
+        ObjectImage,
+        PointImage
+    }
+
+    public static string GetImagePath(string experimentPath, int testId, int camId, ImageType imageType)
+    {
+        return imageType == ImageType.PointImage ? $"{experimentPath}/test_{testId}/cam{camId}image.png" : $"{experimentPath}/object_pictures/cam{camId}image.png";
+    }
+
+    public static byte[] LoadTextureRaw(string experimentPath, int testId, int camId, ImageType imageType)
+    {
+        return System.IO.File.ReadAllBytes(GetImagePath(experimentPath, testId, camId, imageType));
+    }
+
+    public static Texture2D LoadTexture(string experimentPath, int testId, int camId, ImageType imageType)
+    {
+        var bytes = System.IO.File.ReadAllBytes(GetImagePath(experimentPath, testId, camId, imageType));
+        var texture = new Texture2D(2, 2);
+        texture.LoadImage(bytes);
+
+        return texture;
+    }
+
     public static void SavePoints(string path, List<Vector3> points)
     {
         System.IO.File.WriteAllLines(path, points.Select(point => $"{point.x.ToString(CultureInfo.InvariantCulture)}, {point.y.ToString(CultureInfo.InvariantCulture)}, {point.z.ToString(CultureInfo.InvariantCulture)}").ToArray());
