@@ -1010,6 +1010,11 @@ public static class FindPoints {
     {
         var groups = FindIntersectionGroupsBasedOnIterations(cameraRays, treshold, events);
 
+        if (groups.Count == 0)
+        {
+            return Array.Empty<FoundPoint>();
+        }
+
         var filteredGroups = FilterBasedOnGroups(cameraRays, groups, events);
 
         return GetPoints(cameraRays, filteredGroups.intersectionGroups);

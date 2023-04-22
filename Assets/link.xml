@@ -1,0 +1,3 @@
+<linker>
+    <assembly fullname="Newtonsoft.Json.UnityConverters" preserve="all"/>
+</linker>

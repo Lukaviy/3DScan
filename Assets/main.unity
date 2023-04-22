@@ -159,6 +159,9 @@ MonoBehaviour:
     type: 3}
   CameraPrefab: {fileID: 4107443269177211257, guid: 7cdf653922115044ea19fa9ab4a376d9,
     type: 3}
+  Scenes:
+  - scene: {fileID: 7926288143754684713, guid: a36e4a7316f43634c8ca7bb031d54882, type: 3}
+    name: Sphere
 --- !u!4 &222004750
 Transform:
   m_ObjectHideFlags: 0

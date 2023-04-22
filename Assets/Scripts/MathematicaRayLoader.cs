@@ -93,7 +93,7 @@ public static class MathematicaRayLoader
         public List<Vector2>[] camPoints;
     }
 
-    public static Vector3 LoadTranslationVector(string path)
+    public static Vector3 LoadVector3(string path)
     {
         string[] lines = System.IO.File.ReadAllLines(path);
 
@@ -102,6 +102,21 @@ public static class MathematicaRayLoader
         var z = float.Parse(lines[2], CultureInfo.InvariantCulture);
 
         return new Vector3(x, y, z);
+    }
+
+    public static float[] LoadFloatArray(string path)
+    {
+        var line = System.IO.File.ReadAllLines(path).First();
+        return line.Split(',').Select(x => float.Parse(x, CultureInfo.InvariantCulture)).ToArray();
+    }
+
+    public static Vector2 LoadVector2(string path) {
+        string[] lines = System.IO.File.ReadAllLines(path);
+
+        var x = float.Parse(lines[0], CultureInfo.InvariantCulture);
+        var y = float.Parse(lines[1], CultureInfo.InvariantCulture);
+
+        return new Vector2(x, y);
     }
 
     public static Matrix4x4 LoadMatrix(string path)
@@ -136,10 +151,14 @@ public static class MathematicaRayLoader
         ).transpose;
     }
 
+    public static Matrix4x4 GetTransformMatrixFromRotAndVec(Matrix4x4 rot, Vector3 vec, float scale) {
+        return Matrix4x4.Translate(vec * scale) * rot;
+    }
+
     public static Matrix4x4 LoadTransformMatrix(string path, int cam, float scale)
     {
-        return Matrix4x4.Translate(LoadTranslationVector($"{path}/cam{cam}vec.csv") * scale) *
-               LoadMatrix($"{path}/cam{cam}mat.csv");
+        return GetTransformMatrixFromRotAndVec(LoadMatrix($"{path}/cam{cam}mat.csv"), LoadVector3($"{path}/cam{cam}vec.csv"),
+                scale);
     }
 
     public static Matrix4x4 LoadTransformMatrixFromAxesVectors(string path, int cam)
@@ -161,13 +180,21 @@ public static class MathematicaRayLoader
         return float.Parse(lines[0], CultureInfo.InvariantCulture);
     }
 
+    public static Vector2 LoadCamResolution(string path, int camIndex) {
+        return LoadVector2($"{path}/cam{camIndex}resolution.csv");
+    }
+
+    public static Matrix4x4 LoadCamCalibMatrix(string path, int camIndex) {
+        return LoadMatrix($"{path}/cam{camIndex}calibmtx.csv");
+    }
+
     public static Matrix4x4[] LoadInverseCamCalibMatrices(string path, int[] camsIndices)
     {
         Matrix4x4[] res = new Matrix4x4[camsIndices.Max() + 1];
 
         for (int cam_index_id = 0; cam_index_id < camsIndices.Length; cam_index_id++)
         {
-            var calibMatrix = LoadMatrix($"{path}/cam{camsIndices[cam_index_id]}calibmtx.csv");
+            var calibMatrix = LoadCamCalibMatrix(path, camsIndices[cam_index_id]);
             var inverseCalibMatrix = calibMatrix.inverse;
 
             res[cam_index_id] = inverseCalibMatrix;

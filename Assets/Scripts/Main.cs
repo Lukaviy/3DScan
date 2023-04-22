@@ -5,19 +5,58 @@ using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Web.UI.WebControls;
 using ImGuiNET;
 using ImGuizmoNET;
 using UnityEngine;
 using Newtonsoft.Json;
 using UImGui;
 using Visual;
-using OpenCvSharp;
+using Newtonsoft.Json.UnityConverters.Math;
 
 class ExperimentInfo
 {
     public string Name { get; set; }
     public string Path { get; set; }
     public bool AutoLoad { get; set; }
+}
+
+[System.Serializable]
+class CalibrationInfo
+{
+    public CalibrationInfo(DateTime calibrationTime, string name, Vector2 resolution, Matrix4x4 intrinsicMatrix, float[] distortionCoeffs)
+    {
+        this.calibrationTime = calibrationTime;
+        this.name = name;
+        this.resolution = resolution;
+        this.intrinsicMatrix = intrinsicMatrix;
+        this.distortionCoeffs = distortionCoeffs;
+        this.guid = Guid.NewGuid();
+    }
+
+    public DateTime calibrationTime;
+    public string name;
+    public Guid guid;
+
+    public Vector2 resolution;
+    public Matrix4x4 intrinsicMatrix;
+    public float[] distortionCoeffs;
+}
+
+[System.Serializable]
+class CameraInfo
+{
+    public int uniqueId;
+    public int? deviceId;
+    public string name;
+
+    public List<Vector2> availableResolutions;
+
+    public List<CalibrationInfo> calibrationInfos;
+
+    public int? selectedResolution;
+    public Guid? selectedCalibrationInfo;
+    public int exposure;
 }
 
 class Settings
@@ -28,9 +67,15 @@ class Settings
     }
 
     public List<ExperimentInfo> Experiments { get; set; }
+
+    public string CamerasInfoPath { get; set; } = string.Empty;
+
     public int? SelectedExperiment { get; set; }
     public bool ExperimentsWindowIsOpen { get; set; }
     public bool TestsWindowIsOpen { get; set; }
+
+    [NonSerialized]
+    public bool isDirty;
 }
 
 static class Loader
@@ -58,11 +103,11 @@ static class Loader
     }
 }
 
-class RawExperimentDataState
+public class RawExperimentDataState
 {
 }
 
-class RawExperimentData : RawExperimentDataState
+public class RawExperimentData : RawExperimentDataState
 {
     public MathematicaRayLoader.CamPosData[] cameras;
     public MathematicaRayLoader.TestResult[] tests;
@@ -99,6 +144,24 @@ class ExperimentData
     public CalculateExperimentDataState[] calculatedData;
 }
 
+class CameraInfosState {}
+
+class CameraInfosLoadingState : CameraInfosState
+{
+    public TaskToken<List<CameraInfo>> taskToken;
+}
+
+class CameraInfosLoadErrorState : CameraInfosState 
+{
+    public string error;
+}
+
+class CameraInfosLoadedState : CameraInfosState 
+{
+    public List<CameraInfo> cameraInfos;
+    public bool isDirty;
+}
+
 class State
 {
 }
@@ -110,6 +173,48 @@ class InitialState : State
 class LoadExperimentsErrorState : State
 {
     public string error;
+}
+
+class PhysicalCameraWindowState
+{
+    public bool isOpen = true;
+
+    public class ImportCameraInfoState {
+
+        public string cameraInfoPath = string.Empty;
+        public string importError;
+    }
+
+    public ImportCameraInfoState importCameraInfoState = new ();
+
+    public class ImportCalibInfoWindowState {
+        public string currentImportPath = string.Empty;
+        public string currentName = string.Empty;
+        public bool calibMatrixFileExists;
+        public bool distCoeffsFileExists;
+        public bool fileExists;
+        public bool userRequestedCustomName;
+        public string loadErrorMessage;
+        public Vector2 chosenResolution;
+    }
+
+    public ImportCalibInfoWindowState importCalibInfo = new ();
+
+    public class AddPhysicalCameraState
+    {
+        public string currentName = string.Empty;
+        public int uniqueId;
+        public int[] resolution = new int[2];
+    }
+
+    public AddPhysicalCameraState addPhysicalCamera = new ();
+
+    [System.Serializable]
+    public struct PhysicalCameraCalibrationData
+    {
+        public float[,] intrinsicMatrix;
+        public float[] distCoeffs;
+    }
 }
 
 class ExperimentsWindowState
@@ -162,6 +267,22 @@ class ExperimentDataState
     public RayId? selectedRay;
     public LoadTestTaskData loadTestTask;
     public GroupId? selectedGroup;
+
+    public ExperimentDataState(RawExperimentData rawData, string name)
+    {
+        info = new ExperimentInfo { Name = name };
+        data = new ExperimentData
+            { calculatedData = new CalculateExperimentDataState[rawData.tests.Length], rawData = rawData };
+        cameraSelectionStates = new CameraSelectionState[rawData.cameras.Length];
+        selectedTests = new HashSet<int>();
+    }
+
+    public ExperimentDataState(ExperimentInfo expInfo)
+    {
+        info = expInfo;
+        data = new ExperimentData();
+        selectedTests = new HashSet<int>();
+    }
 }
 
 struct FilterData
@@ -174,12 +295,22 @@ struct FilterData
     public int MinRayCount;
     public int MaxRayCount;
 }
+
+[System.Serializable]
+public struct SimulatedScene
+{
+    public GameObject scene;
+    public string name;
+}
+
+
+[System.Serializable]
 class LoadedExperimentsInfoSate : State
 {
     public LoadedExperimentsInfoSate(Settings info)
     {
         m_settings = info;
-        m_experiments = info.Experiments.Select(x => new ExperimentDataState { info = x, data = new ExperimentData(), selectedTests = new HashSet<int>() }).ToList();
+        m_experiments = info.Experiments.Select(x => new ExperimentDataState(x)).ToList();
         ExperimentsWindowState = new ExperimentsWindowState{  };
     }
 
@@ -209,10 +340,14 @@ class LoadedExperimentsInfoSate : State
     {
         return m_experiments[index];
     }
-
     public void AddExperiment(ExperimentInfo info)
     {
-        m_experiments.Add(new ExperimentDataState{ info = info, data = new ExperimentData() });
+        m_experiments.Add(new ExperimentDataState(info));
+        m_settingsIsDirty = true;
+    }
+
+    public void AddExperiment(RawExperimentData data, string name) {
+        m_experiments.Add(new ExperimentDataState(data, name));
         m_settingsIsDirty = true;
     }
 
@@ -220,6 +355,15 @@ class LoadedExperimentsInfoSate : State
     {
         m_experiments.RemoveAt(index);
         m_settingsIsDirty = true;
+        if (SelectedExperiment == index)
+        {
+            SelectedExperiment = null;
+        }
+
+        if (SelectedExperiment > index)
+        {
+            SelectedExperiment--;
+        }
     }
 
     public int? SelectedExperiment
@@ -243,7 +387,27 @@ class LoadedExperimentsInfoSate : State
 
     public bool DrawOnlySelectedPoint { get; set; }
 
-    public bool IsSettingsDirty => m_settingsIsDirty;
+    public bool IsSettingsDirty => m_settingsIsDirty || m_settings.isDirty;
+
+    public CameraInfosState CameraInfos;
+
+    public PhysicalCameraWindowState PhysicalCameraWindowState { get; set; } = new ();
+
+    public void AddPhysicalCameraInfo(CameraInfo cameraInfo)
+    {
+        if (CameraInfos is not CameraInfosLoadedState loadedState)
+        {
+            throw new Exception("Cameras info is not loaded");
+        }
+
+        if (loadedState.cameraInfos.Any(x => x.uniqueId == cameraInfo.uniqueId))
+        {
+            throw new Exception("Duplicate unique id");
+        }
+
+        loadedState.cameraInfos.Add(cameraInfo);
+        loadedState.isDirty = true;
+    }
 
     public void MarkSettingsClean()
     {
@@ -257,7 +421,7 @@ class LoadedExperimentsInfoSate : State
 
     public Settings Settings
     {
-        get { 
+        get {
             m_settings.Experiments = m_experiments.Select(x => x.info).ToList();
             m_settings.ExperimentsWindowIsOpen = ExperimentsWindowState.Open;
             return m_settings;
@@ -286,6 +450,23 @@ class CameraImageLoadState : CameraImageState
     public CancellationTokenSource cancellationToken;
 }
 
+class SimulatedScenesWindowState
+{
+    public int? selectedScene;
+    public float noise = 1.0f;
+    public SceneToScan sceneToScan;
+}
+
+class SimulatedSceneVisualCache
+{
+    public GameObject scene;
+}
+
+class PhysicalCameraCache
+{
+    public NamedCameraTexture[] cameraTextures;
+}
+
 class VisualCache
 {
     public int? selectedExperiment;
@@ -311,10 +492,15 @@ public class Main : MonoBehaviour
     private State m_state = new InitialState();
     private TaskScheduler m_taskScheduler = new(8);
     private VisualCache m_visualCache;
+    private SimulatedSceneVisualCache m_simulatedSceneVisualCache = new ();
+    private SimulatedScenesWindowState m_simulatedScenesWindowState = new ();
+    private PhysicalCameraCache m_physicalCameraCache = new();
 
     public GameObject PointPrefab;
     public GameObject RayPrefab;
     public GameObject CameraPrefab;
+
+    public List<SimulatedScene> Scenes;
 
     void Start()
     {
@@ -521,6 +707,11 @@ public class Main : MonoBehaviour
                         var path = experiment.info.Path;
                         var testId = selectedGroupId.testId;
                         var i = camId;
+
+                        if (path is null)
+                        {
+                            break;
+                        }
 
                         var token = scheduler.EnqueueTask(() =>
                         {
@@ -764,15 +955,15 @@ public class Main : MonoBehaviour
     bool DrawExperimentsWindow(LoadedExperimentsInfoSate loadedState)
     {
         var experimentsWindowOpen = true;
-        if (ImGui.Begin("Experiments", ref experimentsWindowOpen))
+        if (ImGui.Begin("Experiments"))
         {
             if (ImGui.Button("Add"))
             {
                 ImGui.OpenPopup("Add experiment");
             }
 
-            bool open = true;
-            if (ImGui.BeginPopupModal("Add experiment", ref open, ImGuiWindowFlags.AlwaysAutoResize))
+            bool addExperimentOpen = true;
+            if (ImGui.BeginPopupModal("Add experiment", ref addExperimentOpen, ImGuiWindowFlags.AlwaysAutoResize))
             {
                 var windowState = loadedState.ExperimentsWindowState;
 
@@ -793,7 +984,7 @@ public class Main : MonoBehaviour
 
                 if (windowState.currentPath.Length != 0 && !windowState.directoryExists)
                 {
-                    ImGui.TextColored(Color.red, "Directory is not existed");
+                    ImGui.TextColored(Color.red, "Directory is not exist");
                 }
 
                 if (windowState.currentPath.Length == 0)
@@ -829,26 +1020,6 @@ public class Main : MonoBehaviour
                 ImGui.EndPopup();
             }
 
-            if (loadedState.ExperimentDeleteRequested != null && ImGui.BeginPopupModal("Delete experiment?", ref open, ImGuiWindowFlags.AlwaysAutoResize))
-            {
-                ImGui.Text("Do you really want to delete this experiment? ");
-                ImGui.Text($"{loadedState.GetExperimentDataState(loadedState.ExperimentDeleteRequested.Value).info.Name}");
-                if (ImGui.Button("Delete"))
-                {
-                    loadedState.RemoveExperiment(loadedState.ExperimentDeleteRequested.Value);
-                    loadedState.ExperimentDeleteRequested = null;
-                    ImGui.CloseCurrentPopup();
-                }
-                ImGui.SameLine();
-                if (ImGui.Button("Cancel"))
-                {
-                    loadedState.ExperimentDeleteRequested = null;
-                    ImGui.CloseCurrentPopup();
-                }
-
-                ImGui.EndPopup();
-            }
-
             for (var experimentId = 0; experimentId < loadedState.ExperimentsCount; experimentId++)
             {
                 ImGui.Separator();
@@ -871,7 +1042,25 @@ public class Main : MonoBehaviour
                 if (ImGui.Button("Delete"))
                 {
                     loadedState.ExperimentDeleteRequested = experimentId;
-                    ImGui.BeginPopupModal("Delete experiment?");
+                    ImGui.OpenPopup("Delete experiment?");
+                }
+
+                bool deleteExperimentOpen = true;
+                if (ImGui.BeginPopupModal("Delete experiment?", ref deleteExperimentOpen, ImGuiWindowFlags.AlwaysAutoResize)) {
+                    ImGui.Text("Do you really want to delete this experiment? ");
+                    ImGui.Text($"{loadedState.GetExperimentDataState(loadedState.ExperimentDeleteRequested.Value).info.Name}");
+                    if (ImGui.Button("Delete")) {
+                        loadedState.RemoveExperiment(loadedState.ExperimentDeleteRequested.Value);
+                        loadedState.ExperimentDeleteRequested = null;
+                        ImGui.CloseCurrentPopup();
+                    }
+                    ImGui.SameLine();
+                    if (ImGui.Button("Cancel")) {
+                        loadedState.ExperimentDeleteRequested = null;
+                        ImGui.CloseCurrentPopup();
+                    }
+
+                    ImGui.EndPopup();
                 }
 
                 ImGui.SameLine();
@@ -880,7 +1069,6 @@ public class Main : MonoBehaviour
                 {
                     experiment.info.AutoLoad = autoload;
                     loadedState.MarkSettingsDirty();
-                    ImGui.BeginPopupModal("Delete experiment?");
                 }
 
                 switch (experiment.data.rawData)
@@ -1045,6 +1233,117 @@ public class Main : MonoBehaviour
         }
         ImGui.End();
         return experimentsWindowOpen;
+    }
+
+    void DrawPhysicalCameraImages(CameraInfosLoadedState loadedState, PhysicalCameraCache cameraCache)
+    {
+        if (ImGui.Begin("Cameras Stream"))
+        {
+            if (cameraCache.cameraTextures == null ||
+                cameraCache.cameraTextures.Length != loadedState.cameraInfos.Count)
+            {
+                cameraCache.cameraTextures = new NamedCameraTexture[loadedState.cameraInfos.Count];
+            }
+
+            for (var i = 0; i < loadedState.cameraInfos.Count; i++)
+            {
+                cameraCache.cameraTextures[i] ??= new NamedCameraTexture { };
+            }
+
+            CameraImageGetter.GetTextures(cameraCache.cameraTextures);
+
+            for (var id = 0; id < loadedState.cameraInfos.Count; id++)
+            {
+                var cameraInfo = loadedState.cameraInfos[id];
+                ImGui.PushID(id);
+                ImGui.BeginGroup();
+                var state = CameraImageGetter.GetCameraState(cameraInfo.uniqueId);
+
+                var deviceId = cameraInfo.deviceId.GetValueOrDefault(0);
+
+                void startCapture () {
+
+                    if (ImGui.InputInt("Device id", ref deviceId)) {
+                        cameraInfo.deviceId = deviceId;
+                        loadedState.isDirty = true;
+                    }
+
+                    if (ImGui.Button("Start capture")) {
+                        cameraInfo.deviceId = deviceId;
+                        loadedState.isDirty = true;
+                        cameraCache.cameraTextures[id].id = cameraInfo.deviceId;
+                        CameraImageGetter.StartCameraCapture(deviceId, cameraInfo.exposure);
+                    }
+                };
+
+                switch (state)
+                {
+                    case null: {
+                        ImGui.TextUnformatted("Record not started");
+                        startCapture();
+                    } break;
+                    case CameraState.Stopped: {
+                        ImGui.TextUnformatted("Record stopped");
+                        startCapture();
+                    } break;
+                    case CameraState.StartCapturing: {
+                        ImGui.TextColored(Color.yellow, "Capturing is initializing");
+                    } break;
+                    case CameraState.Capturing capturing:
+                    {
+                        if (cameraCache.cameraTextures[id] is { image: { } } texture) {
+                            ImGui.Image(UImGuiUtility.GetTextureId(texture.image),
+                                new Vector2(texture.image.width, texture.image.height) / 2, new Vector2(0, 1), new Vector2(1, 0));
+                        }
+
+                        if (ImGui.Button("Stop capture")) {
+                            CameraImageGetter.StopCameraCapture(cameraInfo.deviceId.Value);
+                        }
+
+                        if (ImGui.SliderInt("Exposure", ref cameraInfo.exposure, -5, 0)) {
+                            CameraImageGetter.SetCameraExposure(cameraInfo.deviceId.Value, cameraInfo.exposure);
+                            loadedState.isDirty = true;
+                        }
+                    } break;
+                    case CameraState.Stopping: {
+                        ImGui.TextColored(Color.magenta, "Capturing is stopping");
+                    } break;
+                    case CameraState.Error error:
+                    {
+                        ImGui.TextColored(Color.red, "Error");
+                        ImGui.TextUnformatted(error.message);
+                        startCapture();
+                    } break;
+                }
+
+                var preview = "N/A";
+                if (cameraInfo.selectedResolution is { } resolutionId)
+                {
+                    var resolution = cameraInfo.availableResolutions[resolutionId];
+                    preview = $"{resolution.x}x{resolution.y}";
+                }
+
+                if (ImGui.BeginCombo("Resolution", preview))
+                {
+                    for (var i = 0; i < cameraInfo.availableResolutions.Count; i++)
+                    {
+                        var resolution = cameraInfo.availableResolutions[i];
+                        if (ImGui.Selectable($"{resolution.x}x{resolution.y}", i == cameraInfo.selectedResolution))
+                        {
+                            cameraInfo.selectedResolution = i;
+                            loadedState.isDirty = true;
+                        }
+                    }
+
+                    ImGui.EndCombo();
+                }
+
+                ImGui.EndGroup();
+                ImGui.PopID();
+            }
+        }
+
+        ImGui.End();
     }
 
     bool DrawTestsWindow(LoadedExperimentsInfoSate loadedState)
@@ -1558,8 +1857,48 @@ public class Main : MonoBehaviour
         ImGui.End();
     }
 
+    TaskToken<List<CameraInfo>> CreateLoadCameraInfoTask(string path)
+    {
+        return m_taskScheduler.EnqueueTask(() =>
+        {
+            var text = File.ReadAllText(path);
+            return JsonConvert.DeserializeObject<List<CameraInfo>>(text);
+        });
+    }
+
     void UpdateState(LoadedExperimentsInfoSate loadedState)
     {
+        if (loadedState.CameraInfos is null && loadedState.Settings.CamerasInfoPath is not null && loadedState.Settings.CamerasInfoPath.Length > 0)
+        {
+            loadedState.CameraInfos = new CameraInfosLoadingState
+            {
+                taskToken = CreateLoadCameraInfoTask(loadedState.Settings.CamerasInfoPath)
+            };
+        }
+
+        if (loadedState.CameraInfos is CameraInfosLoadingState loadingState)
+        {
+            if (loadingState.taskToken.IsCompleted)
+            {
+                try
+                {
+                    var cameraInfos = loadingState.taskToken.Result;
+
+                    loadedState.CameraInfos = new CameraInfosLoadedState
+                    {
+                        cameraInfos = cameraInfos
+                    };
+                }
+                catch (Exception ex)
+                {
+                    loadedState.CameraInfos = new CameraInfosLoadErrorState
+                    {
+                        error = ex.Message
+                    };
+                }
+            }
+        }
+
         for (var experimentId = 0; experimentId < loadedState.ExperimentsCount; experimentId++)
         {
             var experiment = loadedState.GetExperimentDataState(experimentId);
@@ -1759,6 +2098,309 @@ public class Main : MonoBehaviour
         return open;
     }
 
+    void DrawScenesList(List<SimulatedScene> scenes, LoadedExperimentsInfoSate loadedState, SimulatedScenesWindowState state, SimulatedSceneVisualCache cache)
+    {
+        if (ImGui.Button("Reset selection"))
+        {
+            state.selectedScene = null;
+            Destroy(cache.scene);
+            cache.scene = null;
+            state.sceneToScan = null;
+        }
+
+        if (state.sceneToScan is not null)
+        {
+            ImGui.DragFloat("Noise (px)", ref state.noise, 0.1f, 0.0f, 10.0f);
+            if (ImGui.Button("Generate data with noise"))
+            {
+                var experimentData = state.sceneToScan.CreateRawExperimentData(state.noise);
+
+                //foreach (var simulationResult in experimentData.result) {
+                //    foreach (var point in simulationResult.originalPoints) {
+                //        Instantiate(PointPrefab, point, Quaternion.identity);
+                //    }
+                //}
+
+                loadedState.AddExperiment(experimentData.ToRawExperimentData(), scenes[state.selectedScene.Value].name);
+            }
+
+            if (ImGui.Button("Generate data")) {
+                var experimentData = state.sceneToScan.CreateRawExperimentDataGroundTruthCamPositions(state.noise);
+
+                loadedState.AddExperiment(experimentData.ToRawExperimentData(), scenes[state.selectedScene.Value].name);
+            }
+        }
+
+        for (var index = 0; index < scenes.Count; index++)
+        {
+            var scene = scenes[index];
+            var selected = index == state.selectedScene;
+            if (ImGui.Selectable(scene.name, selected) && !selected)
+            {
+                cache.scene = Instantiate(scene.scene);
+
+                state.sceneToScan = cache.scene.GetComponent<SceneToScan>();
+
+                state.selectedScene = index;
+            }
+        }
+    }
+
+    void DrawSimulatedScenesWindow(List<SimulatedScene> scenes, LoadedExperimentsInfoSate loadedState, SimulatedScenesWindowState state, SimulatedSceneVisualCache cache) {
+        if (ImGui.Begin("Simulated scenes"))
+        {
+            DrawScenesList(scenes, loadedState, state, cache);
+            ImGui.Separator();
+        }
+
+        ImGui.End();
+    }
+
+    void DrawPhysicalCameraInfos(CameraInfosLoadedState loadedState, PhysicalCameraWindowState windowState)
+    {
+        if (ImGui.Button("Add physical camera"))
+        {
+            ImGui.OpenPopup("Add physical camera");
+        }
+
+        if (ImGui.BeginPopup("Add physical camera"))
+        {
+            var state = windowState.addPhysicalCamera;
+
+            ImGui.InputText("Name", ref state.currentName, 50);
+
+            ImGui.InputInt("Unique Id", ref state.uniqueId);
+
+            ImGui.InputInt2("Resolution", ref state.resolution[0]);
+
+            if (state.resolution.Any(x => x == 0))
+            {
+                ImGui.TextColored(Color.red, "Enter resolution");
+            }
+            else if (loadedState.cameraInfos.Any(x => x.uniqueId == state.uniqueId)) 
+            {
+                ImGui.TextColored(Color.red, "Id is not unique");
+            }
+            else
+            {
+                if (ImGui.Button("Add"))
+                {
+                    loadedState.cameraInfos.Add(new CameraInfo
+                    {
+                        uniqueId = state.uniqueId,
+                        availableResolutions = new List<Vector2> { new (state.resolution[0], state.resolution[1]) },
+                        calibrationInfos = new List<CalibrationInfo>(),
+                        name = state.currentName
+                    });
+                    ImGui.CloseCurrentPopup();
+                }
+            }
+            ImGui.EndPopup();
+        }
+            
+        foreach (var cameraInfo in loadedState.cameraInfos)
+        {
+            ImGui.PushID(cameraInfo.uniqueId);
+
+            ImGui.TextUnformatted($"{cameraInfo.name}, unique id: {cameraInfo.uniqueId}");
+
+            if (ImGui.BeginPopup("Import calibration info"))
+            {
+                var importCalibState = windowState.importCalibInfo;
+
+                if (ImGui.InputText("Path", ref importCalibState.currentImportPath, 200))
+                {
+                    importCalibState.calibMatrixFileExists = File.Exists($"{importCalibState.currentImportPath}Mtx.csv");
+                    importCalibState.distCoeffsFileExists = File.Exists($"{importCalibState.currentImportPath}Dist.csv");
+                    importCalibState.fileExists = File.Exists(importCalibState.currentImportPath);
+                }
+
+                if (importCalibState.currentImportPath.Length == 0) {
+                    ImGui.TextColored(Color.red, "Provide some path");
+                }
+                else if ((!importCalibState.calibMatrixFileExists || !importCalibState.distCoeffsFileExists) && !importCalibState.fileExists) {
+                    ImGui.TextColored(Color.red, "Some files does not exist");
+                }
+                else if (importCalibState.fileExists && !importCalibState.currentImportPath.EndsWith(".json")) {
+                    ImGui.TextColored(Color.red, "File must have .csv or .json extension");
+                }
+                else if (!importCalibState.userRequestedCustomName) {
+                    importCalibState.currentName = Path.GetFileNameWithoutExtension(importCalibState.currentImportPath);
+                }
+
+                ImGui.InputText("Name", ref importCalibState.currentName, 50);
+
+                if (importCalibState.currentName.Length == 0) {
+                    ImGui.TextColored(Color.red, "Provide some name");
+                }
+                else if (importCalibState.calibMatrixFileExists && importCalibState.distCoeffsFileExists) {
+                    if (ImGui.Button("Import .csv"))
+                    {
+                        try
+                        {
+                            var calibMtx = MathematicaRayLoader.LoadMatrix($"{importCalibState.currentImportPath}Mtx.csv");
+                            var distCoeffs = MathematicaRayLoader.LoadFloatArray($"{importCalibState.currentImportPath}Dist.csv");
+
+                            cameraInfo.calibrationInfos.Add(new CalibrationInfo(DateTime.Now, importCalibState.currentName, importCalibState.chosenResolution, calibMtx, distCoeffs));
+                            loadedState.isDirty = true;
+
+                            ImGui.CloseCurrentPopup();
+                        }
+                        catch (Exception ex) {
+                            importCalibState.loadErrorMessage = ex.Message;
+                            ImGui.OpenPopup("Error load");
+                        }
+                    }
+                    ImGui.SameLine();
+                } else if (importCalibState.fileExists)
+                {
+                    if (ImGui.Button("Import .json")) {
+                        try
+                        {
+                            var data = JsonConvert
+                                .DeserializeObject<PhysicalCameraWindowState.PhysicalCameraCalibrationData>(
+                                    importCalibState.currentImportPath);
+
+                            var calibMtx = Matrix4x4.identity;
+
+                            for (var x = 0; x < data.intrinsicMatrix.GetLength(0); x++)
+                            {
+                                for (var y = 0; y < data.intrinsicMatrix.GetLength(1); y++)
+                                {
+                                    calibMtx[x, y] = data.intrinsicMatrix[x, y];
+                                }
+                            }
+
+                            cameraInfo.calibrationInfos.Add(new CalibrationInfo(DateTime.Now, importCalibState.currentName, importCalibState.chosenResolution, calibMtx, data.distCoeffs));
+                            loadedState.isDirty = true;
+
+                            ImGui.CloseCurrentPopup();
+                        }
+                        catch (Exception ex) {
+                            importCalibState.loadErrorMessage = ex.Message;
+                            ImGui.OpenPopup("Error load");
+                        }
+                    }
+                    ImGui.SameLine();
+                }
+
+                if (ImGui.Button("Cancel"))
+                {
+                    ImGui.CloseCurrentPopup();
+                }
+
+                if (ImGui.BeginPopup("Error load"))
+                {
+                    ImGui.TextColored(Color.red, "Error during load");
+                    ImGui.TextUnformatted(importCalibState.loadErrorMessage);
+
+                    if (ImGui.Button("Shtosh"))
+                    {
+                        ImGui.CloseCurrentPopup();
+                    }
+                    ImGui.EndPopup();
+                }
+
+                ImGui.EndPopup();
+            }
+
+            if (ImGui.CollapsingHeader("Available Resolutions"))
+            {
+                foreach (var resolution in cameraInfo.availableResolutions)
+                {
+                    ImGui.TextUnformatted($"{resolution.x}x{resolution.y}");
+
+                    if (ImGui.Button("Import calibration info"))
+                    {
+                        ImGui.OpenPopup("Import calibration info");
+                        windowState.importCalibInfo.chosenResolution = resolution;
+                    }
+
+                    foreach (var calibrationInfo in cameraInfo.calibrationInfos.Where(x => x.resolution == resolution))
+                    {
+                        ImGui.TextUnformatted($"Name: {calibrationInfo.name}");
+                        ImGui.TextUnformatted($"Date: {calibrationInfo.calibrationTime}");
+                        ImGui.Separator();
+                    }
+                }
+            }
+
+            ImGui.PopID();
+        }
+    }
+
+    bool DrawPhysicalCameraInfos(Settings settings, ref CameraInfosState cameraInfos, PhysicalCameraWindowState windowState)
+    {
+        bool open = true;
+        if (ImGui.Begin("Physical Cameras"))
+        {
+            switch (cameraInfos)
+            {
+                case null:
+                    var cameraInfoImportState = windowState.importCameraInfoState;
+                    ImGui.InputText("Camera Info Path", ref cameraInfoImportState.cameraInfoPath, 200);
+
+                    try
+                    {
+                        if (File.Exists(cameraInfoImportState.cameraInfoPath))
+                        {
+                            if (ImGui.Button("Import"))
+                            {
+                                settings.CamerasInfoPath = cameraInfoImportState.cameraInfoPath;
+                                settings.isDirty = true;
+                            }
+                        }
+                        else
+                        {
+                            ImGui.TextColored(Color.yellow, "File does not exist, create?");
+                            if (ImGui.Button("Create"))
+                            {
+                                var text = JsonConvert.SerializeObject(new List<CameraInfo>());
+                                File.WriteAllText(cameraInfoImportState.cameraInfoPath, text);
+                                settings.CamerasInfoPath = cameraInfoImportState.cameraInfoPath;
+                                settings.isDirty = true;
+                            }
+                        }
+                    }
+                    catch (Exception ex) {
+                        cameraInfoImportState.importError = ex.Message;
+                    }
+
+                    if (cameraInfoImportState.importError is {} message)
+                    {
+                        ImGui.TextUnformatted("Import error:");
+                        ImGui.TextColored(Color.red, message);
+                    }
+                    break;
+                case CameraInfosLoadingState:
+                    ImGui.TextColored(Color.yellow, "Info is currently loading");
+                    break;
+                case CameraInfosLoadErrorState errorState:
+                {
+                    if (ImGui.Button("Retry"))
+                    {
+                        cameraInfos = null;
+                    }
+                    if (ImGui.Button("Clear path")) {
+                        cameraInfos = null;
+                        settings.CamerasInfoPath = string.Empty;
+                    }
+                    ImGui.TextColored(Color.red, "Error during camera infos");
+                    ImGui.TextUnformatted(errorState.error);
+                }
+                    break;
+                case CameraInfosLoadedState loadedState:
+                    DrawPhysicalCameraInfos(loadedState, windowState);
+                    DrawPhysicalCameraImages(loadedState, m_physicalCameraCache);
+                    break;
+            }
+        }
+
+        ImGui.End();
+
+        return open;
+    }
+
     void OnLayout(UImGui.UImGui obj)
     {
         m_taskScheduler.Update();
@@ -1834,73 +2476,88 @@ public class Main : MonoBehaviour
                 loadedState.MarkSettingsClean();
             }
 
+            if (loadedState.PhysicalCameraWindowState.isOpen) {
+                loadedState.PhysicalCameraWindowState.isOpen = DrawPhysicalCameraInfos(loadedState.Settings, ref loadedState.CameraInfos, loadedState.PhysicalCameraWindowState);
+            }
+
+            if (loadedState.CameraInfos is CameraInfosLoadedState { isDirty: true } infoLoaded)
+            {
+                File.WriteAllText(loadedState.Settings.CamerasInfoPath, JsonConvert.SerializeObject(infoLoaded.cameraInfos));
+                infoLoaded.isDirty = false;
+
+            }
+
+            DrawSimulatedScenesWindow(Scenes, loadedState, m_simulatedScenesWindowState, m_simulatedSceneVisualCache);
+
             UpdateState(loadedState);
             UpdateVisualCache(loadedState, m_visualCache);
         }
 
-        ImGui.BeginMainMenuBar();
-
-        if (m_state is LoadedExperimentsInfoSate state)
-        {
-            if (ImGui.BeginMenu("Windows"))
+        if (ImGui.BeginMainMenuBar()) {
+            if (m_state is LoadedExperimentsInfoSate state)
             {
-                var drawExperimentsWindow = state.ExperimentsWindowState.Open;
-                ImGui.Checkbox("Experiments", ref drawExperimentsWindow);
-                state.ExperimentsWindowState.Open = drawExperimentsWindow;
-
-                var drawTestsWindow = state.TestsWindowsIsOpen;
-                ImGui.Checkbox("Tests", ref drawTestsWindow);
-                state.TestsWindowsIsOpen = drawTestsWindow;
-
-                var drawCameraImagesWindow = state.CameraImagesIsOpen;
-                ImGui.Checkbox("Camera images", ref drawCameraImagesWindow);
-                state.CameraImagesIsOpen = drawCameraImagesWindow;
-
-                ImGui.EndMenu();
-            }
-
-            if (ImGui.MenuItem("Point Info"))
-            {
-                state.PointInfoWindowsIsOpen = !state.PointInfoWindowsIsOpen;
-            }
-
-            if (ImGui.BeginMenu("View"))
-            {
-                var drawRays = state.DrawRays;
-                ImGui.Checkbox("Draw rays", ref drawRays);
-                state.DrawRays = drawRays;
-
-                var rayLength = state.RayLength;
-                ImGui.DragFloat("Ray length", ref rayLength, 0.1f, 0.1f, 6.0f);
-                state.RayLength = rayLength;
-
-                var pointSize = state.PointSize;
-                ImGui.DragFloat("Point size", ref pointSize, 0.01f, 0.01f, 0.1f);
-                state.PointSize = pointSize;
-
-                if (ImGui.BeginCombo("Colorization", state.ColorizationType.ToString()))
+                if (ImGui.BeginMenu("Windows"))
                 {
-                    foreach (var type in Enum.GetValues(typeof(ColorizationType)))
-                    {
-                        if (ImGui.Selectable(type.ToString(), (ColorizationType)type == state.ColorizationType))
-                        {
-                            state.ColorizationType = (ColorizationType)type;
-                        }
-                    }
-                    ImGui.EndCombo();
+                    var drawExperimentsWindow = state.ExperimentsWindowState.Open;
+                    ImGui.Checkbox("Experiments", ref drawExperimentsWindow);
+                    state.ExperimentsWindowState.Open = drawExperimentsWindow;
+
+                    var drawTestsWindow = state.TestsWindowsIsOpen;
+                    ImGui.Checkbox("Tests", ref drawTestsWindow);
+                    state.TestsWindowsIsOpen = drawTestsWindow;
+
+                    var drawCameraImagesWindow = state.CameraImagesIsOpen;
+                    ImGui.Checkbox("Camera images", ref drawCameraImagesWindow);
+                    state.CameraImagesIsOpen = drawCameraImagesWindow;
+
+                    ImGui.Checkbox("Physical cameras", ref state.PhysicalCameraWindowState.isOpen);
+
+                    ImGui.EndMenu();
                 }
 
-                DrawFilterWidgets(state);
+                if (ImGui.MenuItem("Point Info"))
+                {
+                    state.PointInfoWindowsIsOpen = !state.PointInfoWindowsIsOpen;
+                }
 
-                ImGui.EndMenu();
+                if (ImGui.BeginMenu("View"))
+                {
+                    var drawRays = state.DrawRays;
+                    ImGui.Checkbox("Draw rays", ref drawRays);
+                    state.DrawRays = drawRays;
+
+                    var rayLength = state.RayLength;
+                    ImGui.DragFloat("Ray length", ref rayLength, 0.1f, 0.1f, 6.0f);
+                    state.RayLength = rayLength;
+
+                    var pointSize = state.PointSize;
+                    ImGui.DragFloat("Point size", ref pointSize, 0.01f, 0.01f, 0.1f);
+                    state.PointSize = pointSize;
+
+                    if (ImGui.BeginCombo("Colorization", state.ColorizationType.ToString()))
+                    {
+                        foreach (var type in Enum.GetValues(typeof(ColorizationType)))
+                        {
+                            if (ImGui.Selectable(type.ToString(), (ColorizationType)type == state.ColorizationType))
+                            {
+                                state.ColorizationType = (ColorizationType)type;
+                            }
+                        }
+                        ImGui.EndCombo();
+                    }
+
+                    DrawFilterWidgets(state);
+
+                    ImGui.EndMenu();
+                }
+
+                if (ImGui.MenuItem("Exit"))
+                {
+                    Application.Quit();
+                }
             }
 
-            if (ImGui.MenuItem("Exit"))
-            {
-                Application.Quit();
-            }
+            ImGui.EndMainMenuBar();
         }
-
-        ImGui.EndMainMenuBar();
     }
 }

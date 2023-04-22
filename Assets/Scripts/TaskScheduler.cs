@@ -38,6 +38,8 @@ public class TaskScheduler
     public TaskScheduler(int maxTasksCount)
     {
         m_maxTasksCount = maxTasksCount;
+        ThreadPool.GetAvailableThreads(out var threads, out var portThreads);
+        ThreadPool.SetMinThreads(threads + maxTasksCount, portThreads);
     }
 
     private abstract class TaskContainerBase
@@ -49,10 +51,10 @@ public class TaskScheduler
     private class TaskContainer<T> : TaskContainerBase
     {
         private Func<T> m_func;
-        private CancellationToken m_cancellationToken;
+        private CancellationToken? m_cancellationToken;
         private TaskTokenInternal<T> m_tokenInternal;
 
-        public TaskContainer(Func<T> func, CancellationToken cancellationToken, TaskTokenInternal<T> tokenInternal, TaskTokenBase token)
+        public TaskContainer(Func<T> func, CancellationToken? cancellationToken, TaskTokenInternal<T> tokenInternal, TaskTokenBase token)
         {
             m_func = func;
             m_cancellationToken = cancellationToken;
@@ -62,7 +64,10 @@ public class TaskScheduler
 
         public override void Run()
         {
-            m_tokenInternal.task = Task.Run(m_func, m_cancellationToken);
+            if (m_cancellationToken is { } token) {
+                m_tokenInternal.task = Task.Run(m_func, token);
+            }
+            m_tokenInternal.task = Task.Run(m_func);
         }
 
         public override TaskTokenBase Token { get; }
@@ -76,6 +81,13 @@ public class TaskScheduler
         var tokenInternal = new TaskTokenInternal<T>();
         var token = new TaskToken<T>(tokenInternal);
         m_taskContainer.Enqueue(new TaskContainer<T>(func, cancellationToken, tokenInternal, token));
+        return token;
+    }
+
+    public TaskToken<T> EnqueueTask<T>(Func<T> func) {
+        var tokenInternal = new TaskTokenInternal<T>();
+        var token = new TaskToken<T>(tokenInternal);
+        m_taskContainer.Enqueue(new TaskContainer<T>(func, null, tokenInternal, token));
         return token;
     }
 
