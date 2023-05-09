@@ -120,86 +120,6 @@ public class SceneToScan : MonoBehaviour
         return new Vector2(point.x + xNoise, point.y + yNoise);
     }
 
-    static Matrix<float> Matrix4x4To3x3Array(Matrix4x4 mat)
-    {
-        var mtx = new Matrix<float>(3, 3);
-
-        mtx[0, 0] = mat.m00;
-        mtx[0, 1] = mat.m01;
-        mtx[0, 2] = mat.m02;
-
-        mtx[1, 0] = mat.m10;
-        mtx[1, 1] = mat.m11;
-        mtx[1, 2] = mat.m12;
-
-        mtx[2, 0] = mat.m20;
-        mtx[2, 1] = mat.m21;
-        mtx[2, 2] = mat.m22;
-
-        return mtx;
-    }
-
-    static Matrix4x4 Matrix4x4To3x3Array(Matrix<double> mat) {
-        var mtx = new Matrix4x4
-        {
-            [0, 0] = (float)mat[0, 0],
-            [0, 1] = (float)mat[0, 1],
-            [0, 2] = (float)mat[0, 2],
-
-            [1, 0] = (float)mat[1, 0],
-            [1, 1] = (float)mat[1, 1],
-            [1, 2] = (float)mat[1, 2],
-
-            [2, 0] = (float)mat[2, 0],
-            [2, 1] = (float)mat[2, 1],
-            [2, 2] = (float)mat[2, 2],
-
-            [3, 3] = 1
-        };
-
-        return mtx;
-    }
-
-    static Matrix4x4? CalibrateCamera(CameraData cameraData, List<Vector3> objectPoints, List<Vector2> imagePoints)
-    {
-        var rotVec = new Matrix<double>(3, 1);
-        var vector = new Matrix<double>(3, 1);
-
-        var res = CvInvoke.SolvePnP(
-            objectPoints.Select(x => new MCvPoint3D32f(x.x, x.y, x.z)).ToArray(),
-            imagePoints.Select(x => new PointF(x.x, x.y)).ToArray(),
-            Matrix4x4To3x3Array(cameraData.intrinsicMatrix),
-            new Mat(),
-            rotVec,
-            vector
-            );
-
-        if (!res)
-        {
-            return null;
-        }
-
-        var rotMat = new Matrix<double>(3, 3);
-
-        CvInvoke.Rodrigues(rotVec, rotMat);
-
-        var vec = new Vector3((float)vector[0, 0], (float)vector[1, 0], (float)vector[2, 0]);
-
-        return MathematicaRayLoader.GetTransformMatrixFromRotAndVec(Matrix4x4To3x3Array(rotMat), vec, 1);
-    }
-
-    static Matrix4x4?[] CalibrateCameras(CameraData[] cameraData, List<Vector3> objectPoints, List<Vector2>[] imagePoints)
-    {
-        var res = new Matrix4x4?[cameraData.Length];
-
-        for (var i = 0; i < cameraData.Length; i++)
-        {
-            res[i] = CalibrateCamera(cameraData[i], objectPoints, imagePoints[i]);
-        }
-
-        return res;
-    }
-
     Matrix4x4[] CalibrateCameras(CameraData[] cameraData, float noise)
     {
         var imagePoints = new List<Vector2>[cameraData.Length];
@@ -215,7 +135,7 @@ public class SceneToScan : MonoBehaviour
             ).ToList();
         }
 
-        return CalibrateCameras(cameraData, marker.Points, imagePoints).Select(x => x.Value).ToArray();
+        return Math.CalibrateCameras(cameraData, marker.Points, imagePoints).Select(x => x.Value).ToArray();
     }
 
     public SimulationResult GenerateTestResult(CameraData[] cameraData, Matrix4x4[] cameraExtrinsics, float noise)

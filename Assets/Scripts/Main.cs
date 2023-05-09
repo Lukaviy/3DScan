@@ -22,7 +22,7 @@ class ExperimentInfo
 }
 
 [System.Serializable]
-class CalibrationInfo
+public class CalibrationInfo
 {
     public CalibrationInfo(DateTime calibrationTime, string name, Vector2 resolution, Matrix4x4 intrinsicMatrix, float[] distortionCoeffs)
     {
@@ -44,7 +44,7 @@ class CalibrationInfo
 }
 
 [System.Serializable]
-class CameraInfo
+public class CameraInfo
 {
     public int uniqueId;
     public int? deviceId;
@@ -208,6 +208,13 @@ class PhysicalCameraWindowState
     }
 
     public AddPhysicalCameraState addPhysicalCamera = new ();
+
+    public class AddResolutionState
+    {
+        public int[] resolution = new int[2];
+    }
+
+    public AddResolutionState addResolutionState = new();
 
     [System.Serializable]
     public struct PhysicalCameraCalibrationData
@@ -393,6 +400,8 @@ class LoadedExperimentsInfoSate : State
 
     public PhysicalCameraWindowState PhysicalCameraWindowState { get; set; } = new ();
 
+    public Scanner Scanner { get; set; } = new();
+
     public void AddPhysicalCameraInfo(CameraInfo cameraInfo)
     {
         if (CameraInfos is not CameraInfosLoadedState loadedState)
@@ -412,6 +421,7 @@ class LoadedExperimentsInfoSate : State
     public void MarkSettingsClean()
     {
         m_settingsIsDirty = false;
+        m_settings.isDirty = false;
     }
 
     public void MarkSettingsDirty()
@@ -1255,24 +1265,25 @@ public class Main : MonoBehaviour
             for (var id = 0; id < loadedState.cameraInfos.Count; id++)
             {
                 var cameraInfo = loadedState.cameraInfos[id];
-                ImGui.PushID(id);
+                ImGui.PushID(cameraInfo.uniqueId);
                 ImGui.BeginGroup();
-                var state = CameraImageGetter.GetCameraState(cameraInfo.uniqueId);
+                var state = CameraImageGetter.GetCameraState(cameraInfo.deviceId.GetValueOrDefault(0));
 
                 var deviceId = cameraInfo.deviceId.GetValueOrDefault(0);
 
                 void startCapture () {
-
                     if (ImGui.InputInt("Device id", ref deviceId)) {
-                        cameraInfo.deviceId = deviceId;
-                        loadedState.isDirty = true;
+                        if (loadedState.cameraInfos.All(x => x.deviceId != deviceId)) {
+                            cameraInfo.deviceId = deviceId;
+                            loadedState.isDirty = true;
+                        }
                     }
 
                     if (ImGui.Button("Start capture")) {
                         cameraInfo.deviceId = deviceId;
                         loadedState.isDirty = true;
                         cameraCache.cameraTextures[id].id = cameraInfo.deviceId;
-                        CameraImageGetter.StartCameraCapture(deviceId, cameraInfo.exposure);
+                        CameraImageGetter.StartCameraCapture(deviceId, cameraInfo.exposure, cameraInfo.availableResolutions[cameraInfo.selectedResolution.GetValueOrDefault(0)]);
                     }
                 };
 
@@ -1291,18 +1302,19 @@ public class Main : MonoBehaviour
                     } break;
                     case CameraState.Capturing capturing:
                     {
-                        if (cameraCache.cameraTextures[id] is { image: { } } texture) {
-                            ImGui.Image(UImGuiUtility.GetTextureId(texture.image),
-                                new Vector2(texture.image.width, texture.image.height) / 2, new Vector2(0, 1), new Vector2(1, 0));
+                        if (cameraCache.cameraTextures[id] is { texture: { } } texture) {
+                            ImGui.Image(UImGuiUtility.GetTextureId(texture.texture),
+                                new Vector2(texture.texture.width, texture.texture.height) / 2, new Vector2(0, 1), new Vector2(1, 0));
+
+                            ImGui.TextUnformatted($"Actual Resolution: {texture.texture.width}x{texture.texture.height}");
+                            ImGui.TextUnformatted($"FPS: {1.0f / capturing.delta:F1}");
+                            ImGui.TextUnformatted($"Grabbing Time: {capturing.grabbingTime:F2}s");
+                            ImGui.TextUnformatted($"Reading Time: {capturing.readingTime:F2}s");
+                            ImGui.TextUnformatted($"Device Id: {cameraInfo.deviceId}");
                         }
 
                         if (ImGui.Button("Stop capture")) {
                             CameraImageGetter.StopCameraCapture(cameraInfo.deviceId.Value);
-                        }
-
-                        if (ImGui.SliderInt("Exposure", ref cameraInfo.exposure, -5, 0)) {
-                            CameraImageGetter.SetCameraExposure(cameraInfo.deviceId.Value, cameraInfo.exposure);
-                            loadedState.isDirty = true;
                         }
                     } break;
                     case CameraState.Stopping: {
@@ -1328,14 +1340,20 @@ public class Main : MonoBehaviour
                     for (var i = 0; i < cameraInfo.availableResolutions.Count; i++)
                     {
                         var resolution = cameraInfo.availableResolutions[i];
-                        if (ImGui.Selectable($"{resolution.x}x{resolution.y}", i == cameraInfo.selectedResolution))
+                        if (ImGui.Selectable($"{resolution.x}x{resolution.y}", i == cameraInfo.selectedResolution)) 
                         {
+                            CameraImageGetter.SetCameraResolution(cameraInfo.deviceId.Value, cameraInfo.availableResolutions[i]);
                             cameraInfo.selectedResolution = i;
                             loadedState.isDirty = true;
                         }
                     }
 
                     ImGui.EndCombo();
+                }
+
+                if (ImGui.SliderInt("Exposure", ref cameraInfo.exposure, -7, 0)) {
+                    CameraImageGetter.SetCameraExposure(cameraInfo.deviceId.Value, cameraInfo.exposure);
+                    loadedState.isDirty = true;
                 }
 
                 ImGui.EndGroup();
@@ -2197,108 +2215,35 @@ public class Main : MonoBehaviour
             }
             ImGui.EndPopup();
         }
-            
+
         foreach (var cameraInfo in loadedState.cameraInfos)
         {
             ImGui.PushID(cameraInfo.uniqueId);
 
             ImGui.TextUnformatted($"{cameraInfo.name}, unique id: {cameraInfo.uniqueId}");
 
-            if (ImGui.BeginPopup("Import calibration info"))
-            {
-                var importCalibState = windowState.importCalibInfo;
+            if (ImGui.BeginPopup("Add Resolution")) {
+                var state = windowState.addResolutionState;
 
-                if (ImGui.InputText("Path", ref importCalibState.currentImportPath, 200))
-                {
-                    importCalibState.calibMatrixFileExists = File.Exists($"{importCalibState.currentImportPath}Mtx.csv");
-                    importCalibState.distCoeffsFileExists = File.Exists($"{importCalibState.currentImportPath}Dist.csv");
-                    importCalibState.fileExists = File.Exists(importCalibState.currentImportPath);
+                ImGui.InputInt2("Resolution", ref state.resolution[0]);
+
+                if (state.resolution.Any(x => x == 0)) {
+                    ImGui.TextColored(Color.red, "Enter resolution");
                 }
-
-                if (importCalibState.currentImportPath.Length == 0) {
-                    ImGui.TextColored(Color.red, "Provide some path");
+                else if (cameraInfo.availableResolutions.Any(x =>
+                             x.x == state.resolution[0] || x.y == state.resolution[1])) {
+                    ImGui.TextColored(Color.red, "Resolution is already exists");
                 }
-                else if ((!importCalibState.calibMatrixFileExists || !importCalibState.distCoeffsFileExists) && !importCalibState.fileExists) {
-                    ImGui.TextColored(Color.red, "Some files does not exist");
-                }
-                else if (importCalibState.fileExists && !importCalibState.currentImportPath.EndsWith(".json")) {
-                    ImGui.TextColored(Color.red, "File must have .csv or .json extension");
-                }
-                else if (!importCalibState.userRequestedCustomName) {
-                    importCalibState.currentName = Path.GetFileNameWithoutExtension(importCalibState.currentImportPath);
-                }
-
-                ImGui.InputText("Name", ref importCalibState.currentName, 50);
-
-                if (importCalibState.currentName.Length == 0) {
-                    ImGui.TextColored(Color.red, "Provide some name");
-                }
-                else if (importCalibState.calibMatrixFileExists && importCalibState.distCoeffsFileExists) {
-                    if (ImGui.Button("Import .csv"))
-                    {
-                        try
-                        {
-                            var calibMtx = MathematicaRayLoader.LoadMatrix($"{importCalibState.currentImportPath}Mtx.csv");
-                            var distCoeffs = MathematicaRayLoader.LoadFloatArray($"{importCalibState.currentImportPath}Dist.csv");
-
-                            cameraInfo.calibrationInfos.Add(new CalibrationInfo(DateTime.Now, importCalibState.currentName, importCalibState.chosenResolution, calibMtx, distCoeffs));
-                            loadedState.isDirty = true;
-
-                            ImGui.CloseCurrentPopup();
-                        }
-                        catch (Exception ex) {
-                            importCalibState.loadErrorMessage = ex.Message;
-                            ImGui.OpenPopup("Error load");
-                        }
-                    }
-                    ImGui.SameLine();
-                } else if (importCalibState.fileExists)
-                {
-                    if (ImGui.Button("Import .json")) {
-                        try
-                        {
-                            var data = JsonConvert
-                                .DeserializeObject<PhysicalCameraWindowState.PhysicalCameraCalibrationData>(
-                                    importCalibState.currentImportPath);
-
-                            var calibMtx = Matrix4x4.identity;
-
-                            for (var x = 0; x < data.intrinsicMatrix.GetLength(0); x++)
-                            {
-                                for (var y = 0; y < data.intrinsicMatrix.GetLength(1); y++)
-                                {
-                                    calibMtx[x, y] = data.intrinsicMatrix[x, y];
-                                }
-                            }
-
-                            cameraInfo.calibrationInfos.Add(new CalibrationInfo(DateTime.Now, importCalibState.currentName, importCalibState.chosenResolution, calibMtx, data.distCoeffs));
-                            loadedState.isDirty = true;
-
-                            ImGui.CloseCurrentPopup();
-                        }
-                        catch (Exception ex) {
-                            importCalibState.loadErrorMessage = ex.Message;
-                            ImGui.OpenPopup("Error load");
-                        }
-                    }
-                    ImGui.SameLine();
-                }
-
-                if (ImGui.Button("Cancel"))
-                {
-                    ImGui.CloseCurrentPopup();
-                }
-
-                if (ImGui.BeginPopup("Error load"))
-                {
-                    ImGui.TextColored(Color.red, "Error during load");
-                    ImGui.TextUnformatted(importCalibState.loadErrorMessage);
-
-                    if (ImGui.Button("Shtosh"))
-                    {
+                else {
+                    if (ImGui.Button("Add")) {
+                        cameraInfo.availableResolutions.Add(new Vector2(state.resolution[0], state.resolution[1]));
+                        loadedState.isDirty = true;
                         ImGui.CloseCurrentPopup();
                     }
-                    ImGui.EndPopup();
+                }
+
+                if (ImGui.Button("Cancel")) {
+                    ImGui.CloseCurrentPopup();
                 }
 
                 ImGui.EndPopup();
@@ -2306,9 +2251,104 @@ public class Main : MonoBehaviour
 
             if (ImGui.CollapsingHeader("Available Resolutions"))
             {
+                if (ImGui.Button("Add Resolution"))
+                {
+                    ImGui.OpenPopup("Add Resolution");
+                }
                 foreach (var resolution in cameraInfo.availableResolutions)
                 {
+                    ImGui.PushID($"{resolution.x}x{resolution.y}");
                     ImGui.TextUnformatted($"{resolution.x}x{resolution.y}");
+
+                    if (ImGui.BeginPopup("Import calibration info")) {
+                        var importCalibState = windowState.importCalibInfo;
+
+                        if (ImGui.InputText("Path", ref importCalibState.currentImportPath, 200)) {
+                            importCalibState.calibMatrixFileExists = File.Exists($"{importCalibState.currentImportPath}Mtx.csv");
+                            importCalibState.distCoeffsFileExists = File.Exists($"{importCalibState.currentImportPath}Dist.csv");
+                            importCalibState.fileExists = File.Exists(importCalibState.currentImportPath);
+                        }
+
+                        if (importCalibState.currentImportPath.Length == 0) {
+                            ImGui.TextColored(Color.red, "Provide some path");
+                        }
+                        else if ((!importCalibState.calibMatrixFileExists || !importCalibState.distCoeffsFileExists) && !importCalibState.fileExists) {
+                            ImGui.TextColored(Color.red, "Some files does not exist");
+                        }
+                        else if (importCalibState.fileExists && !importCalibState.currentImportPath.EndsWith(".json")) {
+                            ImGui.TextColored(Color.red, "File must have .csv or .json extension");
+                        }
+                        else if (!importCalibState.userRequestedCustomName) {
+                            importCalibState.currentName = Path.GetFileNameWithoutExtension(importCalibState.currentImportPath);
+                        }
+
+                        ImGui.InputText("Name", ref importCalibState.currentName, 50);
+
+                        if (importCalibState.currentName.Length == 0) {
+                            ImGui.TextColored(Color.red, "Provide some name");
+                        }
+                        else if (importCalibState.calibMatrixFileExists && importCalibState.distCoeffsFileExists) {
+                            if (ImGui.Button("Import .csv")) {
+                                try {
+                                    var calibMtx = MathematicaRayLoader.LoadMatrix($"{importCalibState.currentImportPath}Mtx.csv");
+                                    var distCoeffs = MathematicaRayLoader.LoadFloatArray($"{importCalibState.currentImportPath}Dist.csv");
+
+                                    cameraInfo.calibrationInfos.Add(new CalibrationInfo(DateTime.Now, importCalibState.currentName, importCalibState.chosenResolution, calibMtx, distCoeffs));
+                                    loadedState.isDirty = true;
+
+                                    ImGui.CloseCurrentPopup();
+                                }
+                                catch (Exception ex) {
+                                    importCalibState.loadErrorMessage = ex.Message;
+                                    ImGui.OpenPopup("Error load");
+                                }
+                            }
+                            ImGui.SameLine();
+                        }
+                        else if (importCalibState.fileExists) {
+                            if (ImGui.Button("Import .json")) {
+                                try {
+                                    var data = JsonConvert
+                                        .DeserializeObject<PhysicalCameraWindowState.PhysicalCameraCalibrationData>(
+                                            importCalibState.currentImportPath);
+
+                                    var calibMtx = Matrix4x4.identity;
+
+                                    for (var x = 0; x < data.intrinsicMatrix.GetLength(0); x++) {
+                                        for (var y = 0; y < data.intrinsicMatrix.GetLength(1); y++) {
+                                            calibMtx[x, y] = data.intrinsicMatrix[x, y];
+                                        }
+                                    }
+
+                                    cameraInfo.calibrationInfos.Add(new CalibrationInfo(DateTime.Now, importCalibState.currentName, importCalibState.chosenResolution, calibMtx, data.distCoeffs));
+                                    loadedState.isDirty = true;
+
+                                    ImGui.CloseCurrentPopup();
+                                }
+                                catch (Exception ex) {
+                                    importCalibState.loadErrorMessage = ex.Message;
+                                    ImGui.OpenPopup("Error load");
+                                }
+                            }
+                            ImGui.SameLine();
+                        }
+
+                        if (ImGui.Button("Cancel")) {
+                            ImGui.CloseCurrentPopup();
+                        }
+
+                        if (ImGui.BeginPopup("Error load")) {
+                            ImGui.TextColored(Color.red, "Error during load");
+                            ImGui.TextUnformatted(importCalibState.loadErrorMessage);
+
+                            if (ImGui.Button("Shtosh")) {
+                                ImGui.CloseCurrentPopup();
+                            }
+                            ImGui.EndPopup();
+                        }
+
+                        ImGui.EndPopup();
+                    }
 
                     if (ImGui.Button("Import calibration info"))
                     {
@@ -2322,10 +2362,22 @@ public class Main : MonoBehaviour
                         ImGui.TextUnformatted($"Date: {calibrationInfo.calibrationTime}");
                         ImGui.Separator();
                     }
+                    ImGui.PopID();
                 }
             }
 
             ImGui.PopID();
+        }
+    }
+
+    void DrawScanner(CameraInfosState cameraInfos, Scanner scanner, PhysicalCameraCache cameraCache) {
+        if (cameraInfos is CameraInfosLoadedState loadedState)
+        {
+            if (ImGui.Begin("Scanner")) 
+            {
+                scanner.Draw(loadedState.cameraInfos, cameraCache.cameraTextures);
+            }
+            ImGui.End();
         }
     }
 
@@ -2480,11 +2532,12 @@ public class Main : MonoBehaviour
                 loadedState.PhysicalCameraWindowState.isOpen = DrawPhysicalCameraInfos(loadedState.Settings, ref loadedState.CameraInfos, loadedState.PhysicalCameraWindowState);
             }
 
+            DrawScanner(loadedState.CameraInfos, loadedState.Scanner, m_physicalCameraCache);
+
             if (loadedState.CameraInfos is CameraInfosLoadedState { isDirty: true } infoLoaded)
             {
                 File.WriteAllText(loadedState.Settings.CamerasInfoPath, JsonConvert.SerializeObject(infoLoaded.cameraInfos));
                 infoLoaded.isDirty = false;
-
             }
 
             DrawSimulatedScenesWindow(Scenes, loadedState, m_simulatedScenesWindowState, m_simulatedSceneVisualCache);

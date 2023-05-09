@@ -1,6 +1,7 @@
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Web.UI.WebControls.WebParts;
@@ -19,18 +20,21 @@ namespace InnerCameraState
 {
     interface IState { }
 
-    struct Capturing : IState {
+    class Capturing : IState {
         public VideoCapture capture;
         public double delta;
+        public double grabbingTime;
+        public double readingTime;
         public int exposure;
+        public Vector2 resolution;
 
         public DateTime frameTime;
         public Mat image;
     }
 
-    struct Stopped : IState { }
+    class Stopped : IState { }
 
-    struct Error : IState {
+    class Error : IState {
         public string message;
     }
 }
@@ -44,6 +48,8 @@ namespace CameraState
     public struct Capturing : IState {
         public double delta;
         public DateTime frameTime;
+        public double grabbingTime;
+        public double readingTime;
         public Mat image;
     }
 
@@ -62,6 +68,7 @@ namespace RequestedCameraState {
 
     public struct Capture : IState {
         public int exposure;
+        public Vector2 resolution;
     }
 
     public struct StopCapture : IState { }
@@ -81,7 +88,8 @@ public struct NamedCameraImage
 public class NamedCameraTexture {
     public int? id;
     public DateTime frameTime;
-    public Texture2D image;
+    public Texture2D texture;
+    public Mat image;
 }
 
 public class CameraImageGetter
@@ -100,12 +108,9 @@ public class CameraImageGetter
         {
             Dictionary<int, InnerCameraState.IState> innerCameraStates = new();
             Dictionary<int, RequestedCameraState.IState> newCameraStates = new();
-            Dictionary<int, CameraImage> cameraImages = new();
 
             while (m_threadRunning)
             {
-                var startTime = DateTime.Now;
-
                 lock (m_requestedCameraStates)
                 {
                     foreach (var (camId, state) in m_requestedCameraStates)
@@ -121,7 +126,7 @@ public class CameraImageGetter
 
                     switch (newState)
                     {
-                        case RequestedCameraState.Capture capture:
+                        case RequestedCameraState.Capture requestedCapture:
                         {
                             switch (innerCameraState)
                             {
@@ -129,11 +134,15 @@ public class CameraImageGetter
                                     try
                                     {
                                         var newCamera = new VideoCapture(camId, VideoCapture.API.DShow);
-                                        newCamera.Set(CapProp.Exposure, capture.exposure);
+                                        newCamera.Set(CapProp.FrameWidth, requestedCapture.resolution.x);
+                                        newCamera.Set(CapProp.FrameHeight, requestedCapture.resolution.y);
+                                        //newCamera.Set(CapProp.Buffersize, 1);
+                                        newCamera.Set(CapProp.Exposure, requestedCapture.exposure);
 
                                         innerCameraState = new InnerCameraState.Capturing
                                         {
                                             capture = newCamera, delta = 0, frameTime = new DateTime(),
+                                            exposure = requestedCapture.exposure, resolution = requestedCapture.resolution,
                                             image = new Mat()
                                         };
                                     }
@@ -146,9 +155,28 @@ public class CameraImageGetter
                                 {
                                     try
                                     {
-                                        if (capturing.exposure != capture.exposure)
+                                        if (capturing.exposure != requestedCapture.exposure)
                                         {
-                                            capturing.capture.Set(CapProp.Exposure, capture.exposure);
+                                            capturing.capture.Set(CapProp.Exposure, requestedCapture.exposure);
+                                        }
+
+                                        if (capturing.resolution != requestedCapture.resolution) {
+                                            capturing.capture.Set(CapProp.FrameWidth, requestedCapture.resolution.x);
+                                            capturing.capture.Set(CapProp.FrameHeight, requestedCapture.resolution.y);
+                                        }
+
+                                        if (capturing.exposure != requestedCapture.exposure ||
+                                            capturing.resolution != requestedCapture.resolution)
+                                        {
+                                            innerCameraState = new InnerCameraState.Capturing
+                                            {
+                                                capture = capturing.capture,
+                                                delta = capturing.delta,
+                                                frameTime = capturing.frameTime,
+                                                exposure = requestedCapture.exposure,
+                                                resolution = requestedCapture.resolution,
+                                                image = capturing.image
+                                            };
                                         }
                                     }
                                     catch (Exception e) {
@@ -165,7 +193,6 @@ public class CameraImageGetter
                                 {
                                     try
                                     {
-                                        capturing.capture.Stop();
                                         capturing.capture.Dispose();
 
                                         innerCameraState = new Stopped();
@@ -185,13 +212,22 @@ public class CameraImageGetter
                 }
 
                 var frameTime = DateTime.Now;
-                foreach (var camId in innerCameraStates.Keys) 
+
+                var camIds = innerCameraStates.Keys.ToArray();
+
+                foreach (var camId in camIds) 
                 {
                     try
                     {
                         if (innerCameraStates[camId] is Capturing capturing)
                         {
-                            capturing.capture.Grab();
+                            var startGrabTime = DateTime.Now;
+                            var res = capturing.capture.Grab();
+                            capturing.grabbingTime = (DateTime.Now - startGrabTime).TotalSeconds;
+                            if (!res) {
+                                capturing.capture.Dispose();
+                                innerCameraStates[camId] = new Error { message = "Error at grabbing image" };
+                            }
                         }
                     }
                     catch (Exception e)
@@ -200,23 +236,32 @@ public class CameraImageGetter
                     }
                 }
 
-                foreach (var (camId, cameraState) in innerCameraStates)
-                {
-                    if (cameraState is not Capturing capturing)
-                    {
-                        continue;
-                    }
+                foreach (var camId in camIds) {
+                    try {
+                        if (innerCameraStates[camId] is Capturing capturing) {
+                            capturing.delta = (frameTime - capturing.frameTime).TotalSeconds;
+                            capturing.frameTime = frameTime;
+                            var startReadTime = DateTime.Now;
+                            var res = capturing.capture.Read(capturing.image);
+                            capturing.readingTime = (DateTime.Now - startReadTime).TotalSeconds;
 
-                    capturing.delta = (frameTime - capturing.frameTime).TotalSeconds;
-                    capturing.frameTime = frameTime;
-                    capturing.capture.Read(capturing.image);
+                            if (!res) {
+                                capturing.capture.Dispose();
+                                innerCameraStates[camId] = new Error { message = "Error at reading image" };
+                            }
+                        }
+                    }
+                    catch (Exception e) {
+                        innerCameraStates[camId] = new Error { message = e.Message };
+                    }
                 }
 
                 var anyActive = false;
-                lock (m_cameraStates) {
+                lock (m_requestedCameraStates) lock (m_cameraStates) {
                     foreach (var (camId, cameraState) in innerCameraStates)
                     {
                         var currentState = m_cameraStates.GetValueOrDefault(camId, null);
+                        var requestedState = m_requestedCameraStates.GetValueOrDefault(camId);
                         switch (cameraState)
                         {
                             case Capturing innerCapturing:
@@ -226,11 +271,17 @@ public class CameraImageGetter
                                 {
                                     case CameraState.Capturing capturing:
                                     {
-                                        capturing.delta = innerCapturing.delta;
-                                        capturing.frameTime = innerCapturing.frameTime;
                                         innerCapturing.image.CopyTo(capturing.image);
+
+                                        currentState = new CameraState.Capturing {
+                                            delta = innerCapturing.delta,
+                                            frameTime = innerCapturing.frameTime,
+                                            grabbingTime = innerCapturing.grabbingTime,
+                                            readingTime = innerCapturing.readingTime,
+                                            image = innerCapturing.image
+                                        };
                                     } break;
-                                    default:
+                                    case CameraState.StartCapturing:
                                     {
                                         var image = new Mat();
                                         innerCapturing.image.CopyTo(image);
@@ -238,6 +289,8 @@ public class CameraImageGetter
                                         currentState = new CameraState.Capturing {
                                             delta = innerCapturing.delta,
                                             frameTime = innerCapturing.frameTime,
+                                            grabbingTime = innerCapturing.grabbingTime,
+                                            readingTime = innerCapturing.readingTime,
                                             image = image
                                         };
                                     } break;
@@ -245,7 +298,7 @@ public class CameraImageGetter
                             } break;
                             case Stopped:
                             {
-                                if (currentState is not CameraState.Stopped)
+                                if (currentState is not CameraState.Stopped && requestedState is StopCapture)
                                 {
                                     currentState = new CameraState.Stopped();
                                 }
@@ -253,6 +306,7 @@ public class CameraImageGetter
                             case Error innerError:
                             {
                                 currentState = new CameraState.Error{ message = innerError.message };
+                                m_requestedCameraStates[camId] = new StopCapture();
                             } break;
                         }
 
@@ -262,14 +316,6 @@ public class CameraImageGetter
 
                 if (!anyActive) {
                     break;
-                }
-
-                var delta = DateTime.Now - startTime;
-
-                var remainingSleepTime = delta - new TimeSpan(0, 0, 0, 0, 1000 / m_fps);
-
-                if (remainingSleepTime.Milliseconds > 0) {
-                    Thread.Sleep(remainingSleepTime);
                 }
             }
 
@@ -288,11 +334,11 @@ public class CameraImageGetter
         });
     }
 
-    public static void StartCameraCapture(int camId, int exposure)
+    public static void StartCameraCapture(int camId, int exposure, Vector2 resolution)
     {
         lock (m_requestedCameraStates) lock (m_cameraStates)
         {
-            m_requestedCameraStates[camId] = new Capture { exposure = exposure };
+            m_requestedCameraStates[camId] = new Capture { exposure = exposure, resolution = resolution };
             m_cameraStates[camId] = new StartCapturing();
         }
 
@@ -302,16 +348,36 @@ public class CameraImageGetter
         }
     }
 
-    public static void SetCameraExposure(int camId, int exposure)
-    {
+    public static void SetCameraExposure(int camId, int exposure) {
         lock (m_requestedCameraStates) {
-            m_requestedCameraStates[camId] = new Capture { exposure = exposure };
+            if (!m_requestedCameraStates.TryGetValue(camId, out var state)) {
+                return;
+            }
+
+            if (state is RequestedCameraState.Capture capture) {
+                m_requestedCameraStates[camId] = new Capture { exposure = exposure, resolution = capture.resolution };
+            }
+        }
+    }
+
+    public static void SetCameraResolution(int camId, Vector2 resolution) {
+        lock (m_requestedCameraStates) {
+            if (!m_requestedCameraStates.TryGetValue(camId, out var state))
+            {
+                return;
+            }
+
+            if (state is RequestedCameraState.Capture capture) 
+            {
+                m_requestedCameraStates[camId] = new Capture { exposure = capture.exposure, resolution = resolution };
+            } 
         }
     }
 
     public static void StopCameraCapture(int camId) {
-        lock (m_requestedCameraStates) {
+        lock (m_requestedCameraStates) lock (m_cameraStates) {
             m_requestedCameraStates[camId] = new StopCapture();
+            m_cameraStates[camId] = new CameraState.Stopping();
         }
     }
 
@@ -321,6 +387,67 @@ public class CameraImageGetter
         {
             return m_cameraStates.GetValueOrDefault(camId, null);
         }
+    }
+
+
+    public static bool GetImage(ref Mat image, int camId)
+    {
+        lock (m_cameraStates)
+        {
+            if (!m_cameraStates.TryGetValue(camId, out var state))
+            {
+                return false;
+            }
+
+            if (state is not CameraState.Capturing capturing) 
+            {
+                return false;
+            }
+
+            image ??= new Mat();
+
+            capturing.image.CopyTo(image);
+
+            return true;
+        }
+    }
+
+    public static void GetImages(NamedCameraImage[] images)
+    {
+        lock (m_cameraStates)
+        {
+            for (var i = 0; i < images.Length; i++)
+            {
+                if (!m_cameraStates.TryGetValue(images[i].id, out var state))
+                {
+                    continue;
+                }
+
+                if (state is not CameraState.Capturing capturing)
+                {
+                    continue;
+                }
+
+                images[i].image.image ??= new Mat();
+
+                capturing.image.CopyTo(images[i].image.image);
+
+                images[i].image.frameTime = capturing.frameTime;
+            }
+        }
+    }
+
+    public static void GetTexture(Mat image, ref Texture2D texture)
+    {
+        texture ??= new Texture2D(image.Width, image.Height, TextureFormat.RGB24, false);
+
+        if (texture.format != TextureFormat.RGB24 || texture.width != image.Width ||
+            texture.height != image.Height) {
+            texture.Reinitialize(image.Width, image.Height, TextureFormat.RGB24, false);
+        }
+
+        texture.LoadRawTextureData(image.GetRawData());
+        texture.Apply();
     }
 
     public static void GetTextures(NamedCameraTexture[] camIds)
@@ -346,17 +473,11 @@ public class CameraImageGetter
 
                 var image = capturing.image;
 
-                cameraImage.image ??= new Texture2D(image.Width, image.Height, TextureFormat.RGB24, false);
+                GetTexture(image, ref cameraImage.texture);
 
-                if (cameraImage.image.format != TextureFormat.RGB24 || cameraImage.image.width != image.Width ||
-                    cameraImage.image.height != image.Height)
-                {
-                    cameraImage.image.Reinitialize(image.Width, image.Height, TextureFormat.RGB24, false);
-                }
+                cameraImage.image ??= new Mat();
 
-                cameraImage.image.LoadRawTextureData(image.GetRawData());
-                cameraImage.image.Apply();
-
+                capturing.image.CopyTo(cameraImage.image);
                 cameraImage.frameTime = capturing.frameTime;
             }
         }
